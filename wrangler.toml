@@ -1,0 +1,20 @@
+name = "poker-tracker"
+main = "src/index.tsx"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Custom domain (kitchow.dev must be a zone in this Cloudflare account)
+routes = [{ pattern = "poker.kitchow.dev", custom_domain = true }]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "poker-tracker"
+database_id = "74309e99-2920-4cf3-bcd4-12ae31b1b473"
+migrations_dir = "migrations"
+
+[vars]
+# Cloudflare Access team domain (from the login page URL)
+ACCESS_TEAM_DOMAIN = "https://little-field-92c4.cloudflareaccess.com"
+# Application Audience (AUD) tag of the self-hosted Access app protecting /admin.
+# Fill in after creating the Access application (see README).
+ACCESS_AUD = "0c028c211a8f4cdb90608706ddb74230a35f96a49ed1825418cfc8adc1f23f6a"
