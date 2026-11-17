@@ -58,6 +58,9 @@ label{font-size:13px;color:var(--muted)}
 .denoms{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-top:8px}
 .denom{display:flex;flex-direction:column;align-items:center;gap:4px}
 .denom input{width:100%;text-align:center;padding:7px 2px}
+.ac{position:relative;flex:1;min-width:180px}.ac input{width:100%}
+.ac-list{position:absolute;left:0;right:0;top:100%;z-index:4;margin:4px 0 0;padding:4px 0;list-style:none;max-height:260px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.12)}
+.ac-list li{padding:10px 12px;cursor:pointer}.ac-list li:hover{background:var(--bg)}
 footer{max-width:960px;margin:24px auto;padding:0 16px;color:var(--muted);font-size:12px}
 `;
 

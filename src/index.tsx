@@ -552,15 +552,35 @@ app.get('/admin/game', async (c) => {
 
       <h2>1. 玩家同買入</h2>
       <div class="card">
-        <form method="post" action="/admin/game/add" class="row">
-          <input name="name" list="players" placeholder="輸入玩家名或綽號" required autocomplete="off" style="flex:1;min-width:180px" />
-          <datalist id="players">
-            {allPlayers.filter((p) => !rows.some((r) => r.player_id === p.id)).map((p) => (
-              <option value={p.name}>{p.nickname ?? ''}</option>
-            ))}
-          </datalist>
+        <form method="post" action="/admin/game/add" class="row" id="addp">
+          <div class="ac">
+            <input name="name" id="addname" placeholder="輸入玩家名或綽號" required autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck={false}
+              role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="acl" />
+            <ul class="card ac-list" id="acl" role="listbox" hidden></ul>
+          </div>
           <button class="btn primary">加入（買入 1 次）</button>
         </form>
+        {/* Custom suggestion list: native <datalist> is unreliable on mobile (no popup after reload, prefix-only matching). */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){var P=${JSON.stringify(
+              allPlayers.filter((p) => !rows.some((r) => r.player_id === p.id)).map((p) => [p.name, p.nickname ?? '']),
+            ).replace(/</g, '\\u003c')};
+var i=document.getElementById('addname'),l=document.getElementById('acl');if(!i||!l)return;
+function close(){l.hidden=true;i.setAttribute('aria-expanded','false')}
+function show(){var q=i.value.trim().toLowerCase();l.innerHTML='';
+var m=P.filter(function(p){return !q||p[0].toLowerCase().indexOf(q)>=0||p[1].toLowerCase().indexOf(q)>=0}).slice(0,30);
+if(!m.length){close();return}
+m.forEach(function(p){var li=document.createElement('li');li.setAttribute('role','option');li.textContent=p[0];
+if(p[1]){var s=document.createElement('span');s.className='sub';s.textContent=' '+p[1];li.appendChild(s)}
+li.addEventListener('mousedown',function(e){e.preventDefault()});
+li.addEventListener('click',function(){i.value=p[0];close();i.focus()});l.appendChild(li)});
+l.hidden=false;i.setAttribute('aria-expanded','true')}
+i.addEventListener('input',show);i.addEventListener('focus',show);
+i.addEventListener('keydown',function(e){if(e.key==='Escape')close()});
+i.addEventListener('blur',function(){setTimeout(close,150)});})();`,
+          }}
+        />
         {newName && (
           <form method="post" action="/admin/game/add" class="warn" style="margin-top:10px">
             <div style="margin-bottom:8px">搵唔到「{newName}」。新增為新玩家並加入呢場？</div>
