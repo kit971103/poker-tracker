@@ -70,6 +70,8 @@ export const Layout: FC<{ title: string; active?: string; admin?: string; childr
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <title>{title} · Poker Tracker</title>
+      <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+      <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
     </head>
     <body>
