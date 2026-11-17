@@ -24,6 +24,7 @@ import {
 } from './lib';
 import { Chip, GameHeader, GameTable, Layout, Signed, Toggles } from './views';
 import { EquityPage } from './equity';
+import { APPLE_TOUCH_ICON_PNG, FAVICON_SVG } from './icon';
 
 type AppEnv = { Bindings: Env; Variables: { email: string } };
 const app = new Hono<AppEnv>();
@@ -77,6 +78,11 @@ const Msg = ({ c }: { c: Context }) => {
 };
 
 // ---------------------------------------------------------------- public pages
+
+const ICON_CACHE = 'public, max-age=86400';
+app.get('/favicon.svg', (c) => c.body(FAVICON_SVG, 200, { 'content-type': 'image/svg+xml', 'cache-control': ICON_CACHE }));
+app.get('/favicon.ico', (c) => c.redirect('/favicon.svg', 301));
+app.get('/apple-touch-icon.png', (c) => c.body(APPLE_TOUCH_ICON_PNG, 200, { 'content-type': 'image/png', 'cache-control': ICON_CACHE }));
 
 app.get('/prefs', (c) => {
   const cur = new URLSearchParams(getCookie(c, 'prefs') ?? '');
