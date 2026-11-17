@@ -23,6 +23,7 @@ import {
   type Unit,
 } from './lib';
 import { Chip, GameHeader, GameTable, Layout, Signed, Toggles } from './views';
+import { EquityPage } from './equity';
 
 type AppEnv = { Bindings: Env; Variables: { email: string } };
 const app = new Hono<AppEnv>();
@@ -325,6 +326,15 @@ options:{maintainAspectRatio:false,interaction:{mode:'index',intersect:false},pl
     </Layout>,
   );
 });
+
+app.get('/equity', (c) =>
+  render(
+    c,
+    <Layout title="Equity 計算機" active="equity">
+      <EquityPage />
+    </Layout>,
+  ),
+);
 
 app.get('/players', async (c) => {
   const { names } = prefs(c);

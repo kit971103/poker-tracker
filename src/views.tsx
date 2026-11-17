@@ -84,6 +84,7 @@ export const Layout: FC<{ title: string; active?: string; admin?: string; childr
             <a href="/dashboard" class={active === 'dashboard' ? 'on' : ''}>Dashboard</a>
             <a href="/games" class={active === 'games' ? 'on' : ''}>歷史</a>
             <a href="/players" class={active === 'players' ? 'on' : ''}>玩家</a>
+            <a href="/equity" class={active === 'equity' ? 'on' : ''}>Equity</a>
           </nav>
           <span class="spacer"></span>
           {admin ? (
