@@ -8,6 +8,7 @@ Cloudflare Worker（Hono）+ D1。公開頁任何人可睇；`/admin/*` 經 Clou
 | Dashboard | `/dashboard` | 公開 |
 | 歷史遊戲 | `/games`、`/games/:id` | 公開 |
 | 玩家 | `/players`、`/players/:id` | 公開 |
+| Equity 計算機 | `/equity` | 公開 |
 | 開局／買入／點數／結束 | `/admin`、`/admin/game` | Access |
 | 玩家管理（綽號） | `/admin/players` | Access |
 
