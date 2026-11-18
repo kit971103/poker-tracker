@@ -42,7 +42,7 @@ npx wrangler login          # 開瀏覽器登入 Cloudflare
 ```bash
 echo DEV_ALLOW_INSECURE=true > .dev.vars     # 本地跳過 Access 驗證，唔好用喺正式環境
 npx wrangler d1 execute poker-tracker --local --file migrations/0001_schema.sql
-npx wrangler d1 execute poker-tracker --local --file migrations/0002_seed.sql
+npx wrangler d1 execute poker-tracker --local --file migrations/0002_seed.sql   # 只存喺本機，見下文
 npm run dev
 ```
 
@@ -58,4 +58,4 @@ npm run dev
 
 ## 數據遷移
 
-`scripts/make_seed.py` 由 Google Sheet 匯出檔生成 `migrations/0002_seed.sql`。玩家嘅 e-transfer 資料冇遷移。
+`scripts/make_seed.py` 由 Google Sheet 匯出檔生成 `migrations/0002_seed.sql`。玩家嘅 e-transfer 資料冇遷移。呢個檔含真實玩家資料，已列入 `.gitignore`，唔會 commit。
