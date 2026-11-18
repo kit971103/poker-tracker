@@ -64,7 +64,7 @@ label{font-size:13px;color:var(--muted)}
 footer{max-width:960px;margin:24px auto;padding:0 16px;color:var(--muted);font-size:12px}
 `;
 
-export const Layout: FC<{ title: string; active?: string; admin?: string; children?: Child }> = ({ title, active, admin, children }) => (
+export const Layout: FC<{ title: string; active?: string; admin?: string; head?: Child; children?: Child }> = ({ title, active, admin, head, children }) => (
   <html lang="zh-Hant-HK">
     <head>
       <meta charset="utf-8" />
@@ -72,6 +72,7 @@ export const Layout: FC<{ title: string; active?: string; admin?: string; childr
       <title>{title} · Poker Tracker</title>
       <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
       <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+      {head}
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
     </head>
     <body>
