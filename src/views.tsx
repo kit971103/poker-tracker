@@ -61,6 +61,18 @@ label{font-size:13px;color:var(--muted)}
 .ac{position:relative;flex:1;min-width:180px}.ac input{width:100%}
 .ac-list{position:absolute;left:0;right:0;top:100%;z-index:4;margin:4px 0 0;padding:4px 0;list-style:none;max-height:260px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.12)}
 .ac-list li{padding:10px 12px;cursor:pointer}.ac-list li:hover{background:var(--bg)}
+/* head-to-head matrix: scrolls both ways inside the card, header row and name column stay put */
+.mx-wrap{overflow:auto;max-height:75vh;margin:0 -14px;padding:0 14px}
+.mx{border-collapse:separate;border-spacing:0}
+.mx th,.mx td{padding:6px 8px;text-align:center;border-bottom:1px solid var(--line)}
+.mx thead th{position:sticky;top:0;z-index:2;background:var(--card);writing-mode:vertical-rl;text-orientation:mixed;text-align:left;white-space:nowrap;max-height:140px;font-size:12px;vertical-align:bottom}
+.mx thead th:first-child{writing-mode:horizontal-tb;z-index:3;left:0}
+.mx tbody th{position:sticky;left:0;z-index:1;background:var(--card);text-align:left;font-weight:600;white-space:nowrap;font-size:13px;color:var(--ink)}
+.mx td a{display:block;text-decoration:none;line-height:1.2}
+.mx td small{display:block;font-size:10px;color:var(--muted)}
+.mx td.self{background:var(--line)}
+.mx td.low{opacity:.4}
+.mx td.none{color:var(--line)}
 footer{max-width:960px;margin:24px auto;padding:0 16px;color:var(--muted);font-size:12px}
 `;
 
@@ -85,6 +97,7 @@ export const Layout: FC<{ title: string; active?: string; admin?: string; childr
             <a href="/" class={active === 'game' ? 'on' : ''}>當前遊戲</a>
             <a href="/dashboard" class={active === 'dashboard' ? 'on' : ''}>Dashboard</a>
             <a href="/games" class={active === 'games' ? 'on' : ''}>歷史</a>
+            <a href="/h2h" class={active === 'h2h' ? 'on' : ''}>對戰</a>
             <a href="/players" class={active === 'players' ? 'on' : ''}>玩家</a>
             <a href="/equity" class={active === 'equity' ? 'on' : ''}>Equity</a>
           </nav>
