@@ -25,6 +25,7 @@ import {
 import { Chip, GameHeader, GameTable, Layout, Signed, Toggles } from './views';
 import { EquityPage } from './equity';
 import { RangePage } from './range';
+import { TexturePage } from './texture';
 import { APPLE_TOUCH_ICON_PNG, FAVICON_SVG } from './icon';
 
 type AppEnv = { Bindings: Env; Variables: { email: string } };
@@ -348,6 +349,15 @@ app.get('/equity/range', (c) =>
     c,
     <Layout title="Equity：範圍 vs 範圍" active="equity">
       <RangePage />
+    </Layout>,
+  ),
+);
+
+app.get('/equity/texture', (c) =>
+  render(
+    c,
+    <Layout title="翻牌面質感分析" active="equity">
+      <TexturePage />
     </Layout>,
   ),
 );
