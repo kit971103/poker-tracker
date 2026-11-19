@@ -29,7 +29,6 @@ import { RangePage } from './range';
 import { TexturePage } from './texture';
 import { APPLE_TOUCH_ICON_PNG, FAVICON_SVG } from './icon';
 import { CARD_JS, CardButtons, cardData, cardJson, fromB64, GameMeta, isPng, toB64 } from './card';
-import { drawSeats, seedInput, sha256Hex } from './seats';
 
 type AppEnv = { Bindings: Env; Variables: { email: string } };
 const app = new Hono<AppEnv>();
@@ -488,121 +487,6 @@ app.get('/h2h', async (c) => {
   );
 });
 
-type SeatDraw = {
-  id: number;
-  game_id: number | null;
-  date: string;
-  players: string;
-  seats: number;
-  nonce: string;
-  seed: string;
-  result: string;
-  button: number;
-  created_by: string | null;
-  created_at: string;
-  game_name: string | null;
-};
-
-const SeatMap = ({ result, button }: { result: (string | null)[]; button: number }) => (
-  <div class="table-oval">
-    {result.map((n, i) => {
-      // seat 1 at the bottom centre, then clockwise
-      const ang = Math.PI / 2 + (2 * Math.PI * i) / result.length;
-      const x = 50 + 44 * Math.cos(ang);
-      const y = 50 + 42 * Math.sin(ang);
-      return (
-        <div class={`seat${n === null ? ' empty' : ''}${button === i + 1 ? ' btn-d' : ''}`} style={`left:${x.toFixed(1)}%;top:${y.toFixed(1)}%`}>
-          <b>{button === i + 1 ? 'D' : i + 1}</b>
-          <span>{n ?? '空位'}</span>
-        </div>
-      );
-    })}
-  </div>
-);
-
-// esbuild's keepNames may wrap inner functions in __name(); define it so the shipped source runs as-is.
-const VERIFY_JS = `var __name=function(f){return f};
-var seedInput=${seedInput.toString()};
-var sha256Hex=${sha256Hex.toString()};
-var drawSeats=${drawSeats.toString()};
-document.querySelectorAll('[data-verify]').forEach(function(btn){btn.addEventListener('click',function(){
-  var d=JSON.parse(btn.dataset.verify),out=btn.nextElementSibling;
-  if(!window.crypto||!crypto.subtle){out.textContent='呢個瀏覽器唔支援 SHA-256（需要 HTTPS）。';return}
-  sha256Hex(seedInput(d.date,d.game_id,d.players,d.nonce)).then(function(seed){
-    var r=drawSeats(seed,d.players,d.seats);
-    var ok=seed===d.seed&&JSON.stringify(r.result)===JSON.stringify(d.result)&&r.button===d.button;
-    out.textContent=ok?'✓ 驗證通過：seed 同結果完全吻合。':'✗ 唔吻合！重新計算得 seed '+seed.slice(0,16)+'…';
-    out.className=ok?'up':'down';
-  });
-})});`;
-
-app.get('/seats', async (c) => {
-  const { results } = await c.env.DB.prepare(
-    `SELECT s.*, g.name AS game_name FROM seat_draws s LEFT JOIN games g ON g.id = s.game_id ORDER BY s.id DESC LIMIT 30`,
-  ).all<SeatDraw>();
-  // n-th draw for the same game/date, so re-draws are visible
-  const nth = new Map<number, number>();
-  const seen = new Map<string, number>();
-  for (const d of [...results].reverse()) {
-    const k = `${d.game_id ?? ''}|${d.date}`;
-    seen.set(k, (seen.get(k) ?? 0) + 1);
-    nth.set(d.id, seen.get(k)!);
-  }
-  return render(
-    c,
-    <Layout title="座位抽籤" active="seats">
-      <div class="row" style="justify-content:space-between">
-        <div>
-          <h1>座位抽籤</h1>
-          <div class="sub">每次抽籤都會記錄，重抽唔會覆寫；任何人都可以撳「驗證」喺自己部機重新計算。</div>
-        </div>
-        <a class="btn primary" href="/admin/seats">抽座位</a>
-      </div>
-      {results.length === 0 && <div class="card sub">未有抽籤紀錄。</div>}
-      {results.map((d, idx) => {
-        const players = JSON.parse(d.players) as string[];
-        const result = JSON.parse(d.result) as (string | null)[];
-        const data = { date: d.date, game_id: d.game_id, players, seats: d.seats, nonce: d.nonce, seed: d.seed, result, button: d.button };
-        return (
-          <div class="card" id={`draw-${d.id}`}>
-            <div class="row" style="justify-content:space-between">
-              <b>
-                #{d.id} · {d.game_name ?? '（冇進行中遊戲）'} · {d.date}
-              </b>
-              <span class={`pill${idx === 0 ? ' live' : ''}`}>
-                {nth.get(d.id)! > 1 ? `第 ${nth.get(d.id)} 次抽` : '第 1 次抽'}
-              </span>
-            </div>
-            <div class="sub">
-              {d.created_at} UTC{d.created_by && ` · ${d.created_by}`} · {players.length} 人 / {d.seats} 個座位
-            </div>
-            <SeatMap result={result} button={d.button} />
-            <ol style="margin:0;padding-left:22px">
-              {result.map((n, i) => (
-                <li class={n === null ? 'sub' : ''}>
-                  {n ?? '空位'} {d.button === i + 1 && <span class="dchip">D</span>}
-                </li>
-              ))}
-            </ol>
-            <details style="margin-top:8px">
-              <summary class="sub">Seed 同驗證</summary>
-              <div class="sub" style="margin-top:6px">seed = SHA-256(日期 | 遊戲 id | 排序後名單（換行分隔）| nonce)</div>
-              <div class="mono">input：{seedInput(d.date, d.game_id, players, d.nonce).replace(/\n/g, '⏎')}</div>
-              <div class="mono">seed：{d.seed}</div>
-              <div class="sub">PRNG：sfc32（seed 頭 16 bytes）· 洗牌：Fisher–Yates（rejection sampling，無偏差）· 之後喺有人嘅座位抽 button</div>
-              <div class="row" style="margin-top:6px">
-                <button type="button" class="btn sm" data-verify={JSON.stringify(data)}>驗證</button>
-                <span></span>
-              </div>
-            </details>
-          </div>
-        );
-      })}
-      <script dangerouslySetInnerHTML={{ __html: VERIFY_JS }} />
-    </Layout>,
-  );
-});
-
 app.get('/equity', (c) =>
   render(
     c,
@@ -836,7 +720,6 @@ app.get('/admin/game', async (c) => {
       <GameHeader game={game}>
         <div class="row">
           <a class="btn" href="/">公開頁</a>
-          <a class="btn" href="/admin/seats">抽座位</a>
           <a class="btn" href="/admin/players">玩家管理</a>
         </div>
       </GameHeader>
@@ -1272,69 +1155,6 @@ document.getElementById('genAll').onclick=function(){run(D)};})();`,
       />
     </Layout>,
   );
-});
-
-app.get('/admin/seats', async (c) => {
-  const { names } = prefs(c);
-  const db = c.env.DB;
-  const open = await getOpenGame(db);
-  const inGame = new Set(open ? (await getRows(db, open.id)).map((r) => r.player_id) : []);
-  const { results: all } = await db.prepare('SELECT id, name, nickname FROM players WHERE id <> 0 ORDER BY name').all<Player>();
-  return render(
-    c,
-    <Layout title="抽座位" admin={c.get('email')}>
-      <div class="row" style="justify-content:space-between">
-        <h1>抽座位</h1>
-        <a class="btn" href="/seats">紀錄</a>
-      </div>
-      <Msg c={c} />
-      <form class="card" method="post" action="/admin/seats">
-        <div class="sub" style="margin-bottom:8px">
-          {open ? `會記錄喺 ${open.name}；已預先剔選呢場嘅玩家。` : '而家冇進行中嘅遊戲，抽籤唔會連去任何一場。'}
-        </div>
-        <div class="chk">
-          {all.map((p) => (
-            <label>
-              <input type="checkbox" name="pid" value={String(p.id)} checked={inGame.has(p.id)} /> {displayName(p, names)}
-            </label>
-          ))}
-        </div>
-        <div class="row" style="margin-top:12px">
-          <label>座位數 <input type="number" name="seats" min="2" max="12" placeholder="同人數" /></label>
-          <button class="btn primary">抽籤</button>
-        </div>
-        <p class="sub" style="margin-bottom:0">每次抽籤都會公開記錄；重抽會新增一筆紀錄。</p>
-      </form>
-    </Layout>,
-  );
-});
-
-app.post('/admin/seats', async (c) => {
-  const { names: mode } = prefs(c);
-  const db = c.env.DB;
-  const f = await c.req.parseBody({ all: true });
-  const ids = ([] as unknown[]).concat(f.pid ?? []).map((v) => Math.trunc(num(v, -1))).filter((v) => v > 0);
-  if (ids.length < 2) return go(c, '/admin/seats', '最少揀 2 位玩家。');
-  const { results: ps } = await db
-    .prepare(`SELECT id, name, nickname FROM players WHERE id IN (${ids.map(() => '?').join(',')})`)
-    .bind(...ids)
-    .all<Player>();
-  const players = ps.map((p) => displayName(p, mode)).sort();
-  if (new Set(players).size !== players.length) return go(c, '/admin/seats', '有玩家顯示名稱重複，請轉做本名再抽。');
-  const seats = Math.min(12, Math.max(players.length, Math.trunc(num(f.seats, players.length)) || players.length));
-  const open = await getOpenGame(db);
-  const date = vancouverToday();
-  const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
-  const seed = await sha256Hex(seedInput(date, open?.id ?? null, players, nonce));
-  const { result, button } = drawSeats(seed, players, seats);
-  const row = await db
-    .prepare(
-      `INSERT INTO seat_draws (game_id, date, players, seats, nonce, seed, result, button, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-    )
-    .bind(open?.id ?? null, date, JSON.stringify(players), seats, nonce, seed, JSON.stringify(result), button, c.get('email'))
-    .first<{ id: number }>();
-  return c.redirect(`/seats#draw-${row?.id ?? ''}`, 303);
 });
 
 app.get('/admin/players', async (c) => {

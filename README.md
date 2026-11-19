@@ -9,10 +9,8 @@ Cloudflare Worker（Hono）+ D1。公開頁任何人可睇；`/admin/*` 經 Clou
 | 歷史遊戲 | `/games`、`/games/:id` | 公開 |
 | 玩家 | `/players`、`/players/:id` | 公開 |
 | 對戰矩陣 | `/h2h` | 公開 |
-| 座位抽籤紀錄 | `/seats` | 公開 |
 | Equity 計算機 | `/equity`、`/equity/range`、`/equity/texture` | 公開 |
 | 開局／買入／點數／結束 | `/admin`、`/admin/game` | Access |
-| 抽座位 | `/admin/seats` | Access |
 | 連結預覽圖（og:image） | `/admin/cards` | Access |
 | 玩家管理（綽號） | `/admin/players` | Access |
 
