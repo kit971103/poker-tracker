@@ -25,6 +25,7 @@ import {
 } from './lib';
 import { Chip, GameHeader, GameTable, Layout, Settlement, Signed, Toggles } from './views';
 import { EquityPage } from './equity';
+import { RangePage } from './range';
 import { APPLE_TOUCH_ICON_PNG, FAVICON_SVG } from './icon';
 import { CARD_JS, CardButtons, cardData, cardJson, fromB64, GameMeta, isPng, toB64 } from './card';
 import { drawSeats, seedInput, sha256Hex } from './seats';
@@ -606,6 +607,15 @@ app.get('/equity', (c) =>
     c,
     <Layout title="Equity 計算機" active="equity">
       <EquityPage />
+    </Layout>,
+  ),
+);
+
+app.get('/equity/range', (c) =>
+  render(
+    c,
+    <Layout title="Equity：範圍 vs 範圍" active="equity">
+      <RangePage />
     </Layout>,
   ),
 );
