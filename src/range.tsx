@@ -143,12 +143,13 @@ const CSS = `
 .cardin input{width:100%}
 `;
 
-export const EquityTabs = ({ on }: { on: 'hand' | 'range' }) => (
+export const EquityTabs = ({ on }: { on: 'hand' | 'range' | 'texture' }) => (
   <>
     <style dangerouslySetInnerHTML={{ __html: '.etabs{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin:6px 0 4px}.etabs a{padding:6px 12px;text-decoration:none;font-size:14px;color:var(--muted)}.etabs a.on{background:var(--accent);color:var(--accent-ink)}' }} />
     <div class="etabs">
       <a href="/equity" class={on === 'hand' ? 'on' : ''}>手牌</a>
       <a href="/equity/range" class={on === 'range' ? 'on' : ''}>範圍 vs 範圍</a>
+      <a href="/equity/texture" class={on === 'texture' ? 'on' : ''}>翻牌面質感</a>
     </div>
   </>
 );
