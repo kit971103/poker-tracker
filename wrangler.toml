@@ -6,6 +6,12 @@ compatibility_flags = ["nodejs_compat"]
 # Custom domain (kitchow.dev must be a zone in this Cloudflare account)
 routes = [{ pattern = "poker.kitchow.dev", custom_domain = true }]
 
+# Workers Logs: keeps request logs and console output, viewable in the dashboard
+# (Workers & Pages → poker-tracker → Observability / Logs).
+[observability]
+enabled = true
+head_sampling_rate = 1   # log every request; the app's traffic is tiny
+
 [[d1_databases]]
 binding = "DB"
 database_name = "poker-tracker"

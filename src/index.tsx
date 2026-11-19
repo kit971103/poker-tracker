@@ -1408,6 +1408,34 @@ app.post('/admin/players/:id{[0-9]+}', async (c) => {
   return go(c, '/admin/players', `已更新 ${name}。`);
 });
 
+// Uncaught errors: one structured log line (searchable in Workers Logs), a friendly page for the visitor.
+// The stack only goes to the log, never to the browser.
+app.onError((err, c) => {
+  const ray = c.req.header('cf-ray') ?? null;
+  console.error(
+    JSON.stringify({
+      level: 'error',
+      msg: err.message,
+      name: err.name,
+      method: c.req.method,
+      path: new URL(c.req.url).pathname,
+      ray,
+      stack: err.stack,
+    }),
+  );
+  return render(
+    c,
+    <Layout title="出錯">
+      <div class="card">
+        <h1>出錯咗</h1>
+        <p>伺服器處理呢個請求時出錯，錯誤已經記錄低。可以稍後再試，或者<a href="/">返主頁</a>。</p>
+        {ray && <p class="sub">參考編號：{ray}</p>}
+      </div>
+    </Layout>,
+    500,
+  );
+});
+
 app.notFound((c) => render(c, <Layout title="搵唔到"><div class="card">搵唔到呢個頁面。<a href="/">返主頁</a></div></Layout>, 404));
 
 export default app;

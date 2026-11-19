@@ -54,6 +54,15 @@ npm run deploy
 
 > 0001、0003、0004 最初係用 `d1 execute --file` 跑，冇記錄。第一次 `npm run deploy` 會將佢哋再跑一次；三個檔都係 `IF NOT EXISTS`，所以冇影響，之後就有記錄。
 
+## Log
+
+`wrangler.toml` 開咗 `[observability]`，所以每個請求（method、URL、status、CPU 時間）同 `console.*` 輸出都會保存：
+
+- **Dashboard**：Workers & Pages → poker-tracker → Observability（或者 Logs）。可以按 status、path 篩選；錯誤嘅 log 係一行 JSON，`level` 係 `error`，入面有 `path`、`msg`、`stack` 同 `ray`。
+- **即時**：`npx wrangler tail poker-tracker`（加 `--status error` 只睇錯誤）。
+
+500 頁面會顯示 Cloudflare Ray ID，用佢喺 log 入面搜尋就搵到對應嗰條記錄。
+
 ## 本地開發
 
 ```bash
