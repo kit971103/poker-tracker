@@ -1,6 +1,6 @@
 /** @jsxImportSource hono/jsx */
 import type { Child, FC } from 'hono/jsx';
-import { DENOMS, displayName, dollarsPerChip, fmt, money, net, signed, type Game, type GameRow, type NameMode } from './lib';
+import { DENOMS, displayName, dollars, dollarsPerChip, fmt, money, net, settle, signed, toCents, type Game, type GameRow, type NameMode } from './lib';
 
 const CSS = `
 :root{--bg:#f6f5f1;--card:#ffffff;--ink:#1c1917;--muted:#78716c;--line:#e7e5e4;--accent:#14532d;--accent-ink:#ffffff;--up:#15803d;--down:#b91c1c;--warn-bg:#fef3c7;--warn:#92400e}
@@ -73,6 +73,11 @@ label{font-size:13px;color:var(--muted)}
 .mx td.self{background:var(--line)}
 .mx td.low{opacity:.4}
 .mx td.none{color:var(--line)}
+.xfer{list-style:none;margin:0;padding:0}
+.xfer li{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+.xfer li:last-child{border-bottom:0}
+.xfer .who{flex:1;min-width:0;overflow-wrap:anywhere}
+.xfer .arrow{color:var(--muted)}
 footer{max-width:960px;margin:24px auto;padding:0 16px;color:var(--muted);font-size:12px}
 `;
 
@@ -233,3 +238,58 @@ export const GameHeader: FC<{ game: Game; children?: Child }> = ({ game, childre
     {children}
   </div>
 );
+
+/** Who pays whom, with the fewest transfers (greedy min cash flow). Closed games with a $ value only. */
+export const Settlement: FC<{ game: Game; rows: GameRow[]; names: NameMode }> = ({ game, rows, names }) => {
+  const dpc = dollarsPerChip(game);
+  if (game.status !== 'closed' || dpc <= 0) return null;
+  const players = rows.filter((r) => r.player_id !== 0);
+  const chipSum = players.reduce((s, r) => s + net(r), 0);
+  const cents = toCents(players.map((r) => net(r) * dpc));
+  const { transfers, unsettled } = settle(players.map((r, i) => ({ id: r.player_id, cents: cents[i] })));
+  const nameOf = new Map(players.map((r) => [r.player_id, displayName(r, names)]));
+  const text = [
+    `${game.name}（${game.date}）結算`,
+    ...transfers.map((t) => `${nameOf.get(t.from)} → ${nameOf.get(t.to)} ${dollars(t.cents)}`),
+  ].join('\n');
+  return (
+    <>
+      <h2>結算</h2>
+      <div class="card">
+        {chipSum !== 0 && (
+          <div class="warn" style="margin-bottom:10px">
+            盈虧總和唔係 0（{signed(chipSum)} 籌碼 = {money(unsettled / 100)}），可能係籌碼點錯或者舊記錄由 [system] 抵銷。以下結算只處理到抵銷之後嘅部分。
+          </div>
+        )}
+        {transfers.length === 0 ? (
+          <div class="sub">冇需要轉帳。</div>
+        ) : (
+          <>
+            <ul class="xfer">
+              {transfers.map((t) => (
+                <li>
+                  <span class="who">
+                    {nameOf.get(t.from)} <span class="arrow">→</span> {nameOf.get(t.to)}
+                  </span>
+                  <b>{dollars(t.cents)}</b>
+                </li>
+              ))}
+            </ul>
+            <div class="row" style="justify-content:space-between;margin-top:10px">
+              <span class="sub">共 {transfers.length} 筆轉帳</span>
+              <button type="button" class="btn sm" id="copySettle" data-text={text}>複製結算</button>
+            </div>
+            <script
+              dangerouslySetInnerHTML={{
+                __html: `(function(){var b=document.getElementById('copySettle');if(!b)return;
+function done(){var o=b.textContent;b.textContent='已複製 ✓';setTimeout(function(){b.textContent=o},1500)}
+function fallback(t){var a=document.createElement('textarea');a.value=t;a.setAttribute('readonly','');a.style.position='fixed';a.style.opacity='0';document.body.appendChild(a);a.select();a.setSelectionRange(0,t.length);try{document.execCommand('copy');done()}catch(e){prompt('複製以下文字',t)}document.body.removeChild(a)}
+b.addEventListener('click',function(){var t=b.dataset.text;if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(t).then(done,function(){fallback(t)})}else fallback(t)});})();`,
+              }}
+            />
+          </>
+        )}
+      </div>
+    </>
+  );
+};

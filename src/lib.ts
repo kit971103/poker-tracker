@@ -203,3 +203,46 @@ export function headToHead(rows: { game_id: number; player_id: number; v: number
   }
   return out;
 }
+// ---------------------------------------------------------------- settlement
+
+/**
+ * Convert dollar amounts to integer cents so that rounding never breaks a zero sum:
+ * each value is floored, then the leftover cents go to the largest remainders.
+ */
+export function toCents(dollars: number[]): number[] {
+  const exact = dollars.map((d) => d * 100);
+  const base = exact.map((x) => Math.floor(x + 1e-9));
+  let rest = Math.round(exact.reduce((s, x) => s + x, 0)) - base.reduce((s, x) => s + x, 0);
+  const order = exact.map((x, i) => ({ i, f: x - base[i] })).sort((a, b) => b.f - a.f);
+  for (let k = 0; rest > 0 && k < order.length; k++, rest--) base[order[k].i] += 1;
+  return base;
+}
+
+export type Transfer = { from: number; to: number; cents: number };
+
+/**
+ * Min cash flow, greedy: pair the largest debtor with the largest creditor until all are settled.
+ * Every step zeroes at least one balance, so the result has at most n - 1 transfers.
+ * Not guaranteed globally minimal (that problem is NP-hard) but fine for a home game.
+ * `unsettled` is the sum of the input; anything but 0 means the chips were miscounted.
+ */
+export function settle(balances: { id: number; cents: number }[]): { transfers: Transfer[]; unsettled: number } {
+  const unsettled = balances.reduce((s, b) => s + b.cents, 0);
+  const debt = balances.filter((b) => b.cents < 0).map((b) => ({ id: b.id, v: -b.cents }));
+  const cred = balances.filter((b) => b.cents > 0).map((b) => ({ id: b.id, v: b.cents }));
+  const transfers: Transfer[] = [];
+  const top = (a: { v: number }[]) => a.reduce((m, x, i) => (x.v > a[m].v ? i : m), 0);
+  while (debt.length && cred.length) {
+    const di = top(debt);
+    const ci = top(cred);
+    const amt = Math.min(debt[di].v, cred[ci].v);
+    transfers.push({ from: debt[di].id, to: cred[ci].id, cents: amt });
+    debt[di].v -= amt;
+    cred[ci].v -= amt;
+    if (debt[di].v === 0) debt.splice(di, 1);
+    if (cred[ci].v === 0) cred.splice(ci, 1);
+  }
+  return { transfers, unsettled };
+}
+
+export const dollars = (cents: number) => '$' + fmt(cents / 100, 2);
