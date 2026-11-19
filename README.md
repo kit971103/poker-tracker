@@ -8,8 +8,12 @@ Cloudflare Worker（Hono）+ D1。公開頁任何人可睇；`/admin/*` 經 Clou
 | Dashboard | `/dashboard` | 公開 |
 | 歷史遊戲 | `/games`、`/games/:id` | 公開 |
 | 玩家 | `/players`、`/players/:id` | 公開 |
-| Equity 計算機 | `/equity` | 公開 |
+| 對戰矩陣 | `/h2h` | 公開 |
+| 座位抽籤紀錄 | `/seats` | 公開 |
+| Equity 計算機 | `/equity`、`/equity/range`、`/equity/texture` | 公開 |
 | 開局／買入／點數／結束 | `/admin`、`/admin/game` | Access |
+| 抽座位 | `/admin/seats` | Access |
+| 連結預覽圖（og:image） | `/admin/cards` | Access |
 | 玩家管理（綽號） | `/admin/players` | Access |
 
 ## 已完成
@@ -37,13 +41,27 @@ npx wrangler login          # 開瀏覽器登入 Cloudflare
    未設定 `ACCESS_AUD` 之前，`/admin` 會回 503，唔會開放。
 5. 舊嘅 `hello-world` Worker 同佢嘅 Access application 可以刪除。
 
+## 日常部署
+
+```bash
+npm run deploy
+```
+
+會先執行 `wrangler d1 migrations apply poker-tracker --remote`（只跑 `migrations/` 入面未跑過嘅檔，記錄喺 D1 嘅 `d1_migrations` 表），再 `wrangler deploy`。
+即係 schema 一定比代碼先更新，唔會出現「代碼上咗線但表未建立」嘅 500。只想更新 schema 可以用 `npm run migrate`。
+
+新增 schema 改動時，喺 `migrations/` 加一個編號更大嘅檔（例如 `0005_xxx.sql`），用 `CREATE … IF NOT EXISTS` 等可重複執行嘅寫法。
+
+> 0001、0003、0004 最初係用 `d1 execute --file` 跑，冇記錄。第一次 `npm run deploy` 會將佢哋再跑一次；三個檔都係 `IF NOT EXISTS`，所以冇影響，之後就有記錄。
+
 ## 本地開發
 
 ```bash
 echo DEV_ALLOW_INSECURE=true > .dev.vars     # 本地跳過 Access 驗證，唔好用喺正式環境
-npx wrangler d1 execute poker-tracker --local --file migrations/0001_schema.sql
-npx wrangler d1 execute poker-tracker --local --file migrations/0002_seed.sql   # 只存喺本機，見下文
+npm run migrate:local                         # 建立本地 schema
+npx wrangler d1 execute poker-tracker --local --file seed.sql                  # 可選：真實數據，只存喺本機，見下文
 npm run dev
+npm test                                      # 單元測試（node --test）
 ```
 
 ## 規則
@@ -58,4 +76,5 @@ npm run dev
 
 ## 數據遷移
 
-`scripts/make_seed.py` 由 Google Sheet 匯出檔生成 `migrations/0002_seed.sql`。玩家嘅 e-transfer 資料冇遷移。呢個檔含真實玩家資料，已列入 `.gitignore`，唔會 commit。
+`scripts/make_seed.py` 由 Google Sheet 匯出檔生成 `seed.sql`。玩家嘅 e-transfer 資料冇遷移。呢個檔含真實玩家資料，已列入 `.gitignore`，唔會 commit。
+佢刻意唔放喺 `migrations/`：否則 `npm run deploy` 會當佢係 migration，再插入一次線上數據。

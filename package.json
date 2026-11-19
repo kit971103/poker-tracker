@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "migrate": "wrangler d1 migrations apply poker-tracker --remote",
+    "migrate:local": "wrangler d1 migrations apply poker-tracker --local",
+    "deploy": "npm run migrate && wrangler deploy",
     "typecheck": "tsc -p .",
     "test": "node --test 'test/*.test.ts'"
   },
