@@ -1,6 +1,6 @@
 /** @jsxImportSource hono/jsx */
 import type { Child, FC } from 'hono/jsx';
-import { DENOMS, displayName, dollarsPerChip, fmt, money, net, signed, type Game, type GameRow, type NameMode } from './lib';
+import { DENOMS, displayName, dollars, dollarsPerChip, fmt, money, net, settle, signed, toCents, type Game, type GameRow, type NameMode } from './lib';
 
 const CSS = `
 :root{--bg:#f6f5f1;--card:#ffffff;--ink:#1c1917;--muted:#78716c;--line:#e7e5e4;--accent:#14532d;--accent-ink:#ffffff;--up:#15803d;--down:#b91c1c;--warn-bg:#fef3c7;--warn:#92400e}
@@ -61,10 +61,40 @@ label{font-size:13px;color:var(--muted)}
 .ac{position:relative;flex:1;min-width:180px}.ac input{width:100%}
 .ac-list{position:absolute;left:0;right:0;top:100%;z-index:4;margin:4px 0 0;padding:4px 0;list-style:none;max-height:260px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.12)}
 .ac-list li{padding:10px 12px;cursor:pointer}.ac-list li:hover{background:var(--bg)}
+/* seat draw: oval table with seats around it */
+.table-oval{position:relative;width:100%;max-width:420px;aspect-ratio:4/3;margin:8px auto}
+.table-oval::before{content:"";position:absolute;inset:18%;border-radius:50%;background:#14532d;border:6px solid #713f12}
+.seat{position:absolute;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;width:84px;text-align:center;font-size:12px;line-height:1.2}
+.seat b{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;background:var(--card);border:2px solid var(--line);font-size:12px}
+.seat span{overflow-wrap:anywhere;margin-top:2px}
+.seat.empty{opacity:.45}
+.seat.btn-d b{border-color:#ca8a04;background:#fde68a;color:#1c1917}
+.dchip{display:inline-block;background:#fde68a;color:#1c1917;border-radius:50%;width:18px;height:18px;line-height:18px;text-align:center;font-size:11px;font-weight:700}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;overflow-wrap:anywhere}
+.chk{display:flex;flex-wrap:wrap;gap:6px}
+.chk label{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:8px;padding:4px 8px;color:var(--ink);font-size:14px}
+.chk input{min-height:auto}
+/* head-to-head matrix: scrolls both ways inside the card, header row and name column stay put */
+.mx-wrap{overflow:auto;max-height:75vh;margin:0 -14px;padding:0 14px}
+.mx{border-collapse:separate;border-spacing:0}
+.mx th,.mx td{padding:6px 8px;text-align:center;border-bottom:1px solid var(--line)}
+.mx thead th{position:sticky;top:0;z-index:2;background:var(--card);writing-mode:vertical-rl;text-orientation:mixed;text-align:left;white-space:nowrap;max-height:140px;font-size:12px;vertical-align:bottom}
+.mx thead th:first-child{writing-mode:horizontal-tb;z-index:3;left:0}
+.mx tbody th{position:sticky;left:0;z-index:1;background:var(--card);text-align:left;font-weight:600;white-space:nowrap;font-size:13px;color:var(--ink)}
+.mx td a{display:block;text-decoration:none;line-height:1.2}
+.mx td small{display:block;font-size:10px;color:var(--muted)}
+.mx td.self{background:var(--line)}
+.mx td.low{opacity:.4}
+.mx td.none{color:var(--line)}
+.xfer{list-style:none;margin:0;padding:0}
+.xfer li{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+.xfer li:last-child{border-bottom:0}
+.xfer .who{flex:1;min-width:0;overflow-wrap:anywhere}
+.xfer .arrow{color:var(--muted)}
 footer{max-width:960px;margin:24px auto;padding:0 16px;color:var(--muted);font-size:12px}
 `;
 
-export const Layout: FC<{ title: string; active?: string; admin?: string; children?: Child }> = ({ title, active, admin, children }) => (
+export const Layout: FC<{ title: string; active?: string; admin?: string; head?: Child; children?: Child }> = ({ title, active, admin, head, children }) => (
   <html lang="zh-Hant-HK">
     <head>
       <meta charset="utf-8" />
@@ -72,6 +102,7 @@ export const Layout: FC<{ title: string; active?: string; admin?: string; childr
       <title>{title} · Poker Tracker</title>
       <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
       <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+      {head}
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
     </head>
     <body>
@@ -85,7 +116,9 @@ export const Layout: FC<{ title: string; active?: string; admin?: string; childr
             <a href="/" class={active === 'game' ? 'on' : ''}>當前遊戲</a>
             <a href="/dashboard" class={active === 'dashboard' ? 'on' : ''}>Dashboard</a>
             <a href="/games" class={active === 'games' ? 'on' : ''}>歷史</a>
+            <a href="/h2h" class={active === 'h2h' ? 'on' : ''}>對戰</a>
             <a href="/players" class={active === 'players' ? 'on' : ''}>玩家</a>
+            <a href="/seats" class={active === 'seats' ? 'on' : ''}>座位</a>
             <a href="/equity" class={active === 'equity' ? 'on' : ''}>Equity</a>
           </nav>
           <span class="spacer"></span>
@@ -220,3 +253,58 @@ export const GameHeader: FC<{ game: Game; children?: Child }> = ({ game, childre
     {children}
   </div>
 );
+
+/** Who pays whom, with the fewest transfers (greedy min cash flow). Closed games with a $ value only. */
+export const Settlement: FC<{ game: Game; rows: GameRow[]; names: NameMode }> = ({ game, rows, names }) => {
+  const dpc = dollarsPerChip(game);
+  if (game.status !== 'closed' || dpc <= 0) return null;
+  const players = rows.filter((r) => r.player_id !== 0);
+  const chipSum = players.reduce((s, r) => s + net(r), 0);
+  const cents = toCents(players.map((r) => net(r) * dpc));
+  const { transfers, unsettled } = settle(players.map((r, i) => ({ id: r.player_id, cents: cents[i] })));
+  const nameOf = new Map(players.map((r) => [r.player_id, displayName(r, names)]));
+  const text = [
+    `${game.name}（${game.date}）結算`,
+    ...transfers.map((t) => `${nameOf.get(t.from)} → ${nameOf.get(t.to)} ${dollars(t.cents)}`),
+  ].join('\n');
+  return (
+    <>
+      <h2>結算</h2>
+      <div class="card">
+        {chipSum !== 0 && (
+          <div class="warn" style="margin-bottom:10px">
+            盈虧總和唔係 0（{signed(chipSum)} 籌碼 = {money(unsettled / 100)}），可能係籌碼點錯或者舊記錄由 [system] 抵銷。以下結算只處理到抵銷之後嘅部分。
+          </div>
+        )}
+        {transfers.length === 0 ? (
+          <div class="sub">冇需要轉帳。</div>
+        ) : (
+          <>
+            <ul class="xfer">
+              {transfers.map((t) => (
+                <li>
+                  <span class="who">
+                    {nameOf.get(t.from)} <span class="arrow">→</span> {nameOf.get(t.to)}
+                  </span>
+                  <b>{dollars(t.cents)}</b>
+                </li>
+              ))}
+            </ul>
+            <div class="row" style="justify-content:space-between;margin-top:10px">
+              <span class="sub">共 {transfers.length} 筆轉帳</span>
+              <button type="button" class="btn sm" id="copySettle" data-text={text}>複製結算</button>
+            </div>
+            <script
+              dangerouslySetInnerHTML={{
+                __html: `(function(){var b=document.getElementById('copySettle');if(!b)return;
+function done(){var o=b.textContent;b.textContent='已複製 ✓';setTimeout(function(){b.textContent=o},1500)}
+function fallback(t){var a=document.createElement('textarea');a.value=t;a.setAttribute('readonly','');a.style.position='fixed';a.style.opacity='0';document.body.appendChild(a);a.select();a.setSelectionRange(0,t.length);try{document.execCommand('copy');done()}catch(e){prompt('複製以下文字',t)}document.body.removeChild(a)}
+b.addEventListener('click',function(){var t=b.dataset.text;if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(t).then(done,function(){fallback(t)})}else fallback(t)});})();`,
+              }}
+            />
+          </>
+        )}
+      </div>
+    </>
+  );
+};

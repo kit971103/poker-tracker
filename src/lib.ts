@@ -165,3 +165,84 @@ export const fmt = (n: number, digits = 0) =>
 export const signed = (n: number, digits = 0) => (n > 0 ? '+' : n < 0 ? '−' : '') + fmt(Math.abs(n), digits);
 
 export const money = (n: number) => (n > 0 ? '+$' : n < 0 ? '−$' : '$') + fmt(Math.abs(n), 2);
+
+// ---------------------------------------------------------------- head-to-head
+
+export type H2HGame = { game_id: number; a: number; b: number };
+export type H2HCell = { n: number; diff: number; wins: number; losses: number; games: H2HGame[] };
+
+/**
+ * Pairwise comparison over co-attended games only.
+ * diff(A,B) = Σ (net_A − net_B) / 2 — antisymmetric by construction, and equal to A's own result
+ * in a heads-up game (net_B = −net_A). wins = games where A finished ahead of B.
+ */
+export function headToHead(rows: { game_id: number; player_id: number; v: number }[]): Map<string, H2HCell> {
+  const byGame = new Map<number, { player_id: number; v: number }[]>();
+  for (const r of rows) {
+    if (!byGame.has(r.game_id)) byGame.set(r.game_id, []);
+    byGame.get(r.game_id)!.push(r);
+  }
+  const out = new Map<string, H2HCell>();
+  const cell = (a: number, b: number) => {
+    const k = `${a}:${b}`;
+    let c = out.get(k);
+    if (!c) out.set(k, (c = { n: 0, diff: 0, wins: 0, losses: 0, games: [] }));
+    return c;
+  };
+  for (const [game_id, ps] of byGame) {
+    for (const x of ps)
+      for (const y of ps) {
+        if (x.player_id === y.player_id) continue;
+        const c = cell(x.player_id, y.player_id);
+        c.n++;
+        c.diff += (x.v - y.v) / 2;
+        if (x.v > y.v) c.wins++;
+        else if (x.v < y.v) c.losses++;
+        c.games.push({ game_id, a: x.v, b: y.v });
+      }
+  }
+  return out;
+}
+// ---------------------------------------------------------------- settlement
+
+/**
+ * Convert dollar amounts to integer cents so that rounding never breaks a zero sum:
+ * each value is floored, then the leftover cents go to the largest remainders.
+ */
+export function toCents(dollars: number[]): number[] {
+  const exact = dollars.map((d) => d * 100);
+  const base = exact.map((x) => Math.floor(x + 1e-9));
+  let rest = Math.round(exact.reduce((s, x) => s + x, 0)) - base.reduce((s, x) => s + x, 0);
+  const order = exact.map((x, i) => ({ i, f: x - base[i] })).sort((a, b) => b.f - a.f);
+  for (let k = 0; rest > 0 && k < order.length; k++, rest--) base[order[k].i] += 1;
+  return base;
+}
+
+export type Transfer = { from: number; to: number; cents: number };
+
+/**
+ * Min cash flow, greedy: pair the largest debtor with the largest creditor until all are settled.
+ * Every step zeroes at least one balance, so the result has at most n - 1 transfers.
+ * Not guaranteed globally minimal (that problem is NP-hard) but fine for a home game.
+ * `unsettled` is the sum of the input; anything but 0 means the chips were miscounted.
+ */
+export function settle(balances: { id: number; cents: number }[]): { transfers: Transfer[]; unsettled: number } {
+  const unsettled = balances.reduce((s, b) => s + b.cents, 0);
+  const debt = balances.filter((b) => b.cents < 0).map((b) => ({ id: b.id, v: -b.cents }));
+  const cred = balances.filter((b) => b.cents > 0).map((b) => ({ id: b.id, v: b.cents }));
+  const transfers: Transfer[] = [];
+  const top = (a: { v: number }[]) => a.reduce((m, x, i) => (x.v > a[m].v ? i : m), 0);
+  while (debt.length && cred.length) {
+    const di = top(debt);
+    const ci = top(cred);
+    const amt = Math.min(debt[di].v, cred[ci].v);
+    transfers.push({ from: debt[di].id, to: cred[ci].id, cents: amt });
+    debt[di].v -= amt;
+    cred[ci].v -= amt;
+    if (debt[di].v === 0) debt.splice(di, 1);
+    if (cred[ci].v === 0) cred.splice(ci, 1);
+  }
+  return { transfers, unsettled };
+}
+
+export const dollars = (cents: number) => '$' + fmt(cents / 100, 2);
