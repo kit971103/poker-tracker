@@ -26,6 +26,7 @@ import {
 import { Chip, GameHeader, GameTable, Layout, Settlement, Signed, Toggles } from './views';
 import { EquityPage } from './equity';
 import { APPLE_TOUCH_ICON_PNG, FAVICON_SVG } from './icon';
+import { CARD_JS, CardButtons, cardData, cardJson, fromB64, GameMeta, isPng, toB64 } from './card';
 import { drawSeats, seedInput, sha256Hex } from './seats';
 
 type AppEnv = { Bindings: Env; Variables: { email: string } };
@@ -61,6 +62,9 @@ async function getRows(db: D1Database, gameId: number) {
     .bind(gameId)
     .all<GameRow>();
   return results;
+}
+async function hasCard(db: D1Database, gameId: number) {
+  return !!(await db.prepare('SELECT 1 FROM game_cards WHERE game_id = ?').bind(gameId).first());
 }
 const num = (v: unknown, d = 0) => {
   const n = Number(v);
@@ -104,9 +108,11 @@ app.get('/', async (c) => {
     return render(c, <Layout title="當前遊戲" active="game"><div class="card">未有任何遊戲。<a href="/admin">開新局</a></div></Layout>);
   }
   const rows = await getRows(c.env.DB, game.id);
+  const closed = game.status === 'closed';
+  const og = closed && (await hasCard(c.env.DB, game.id));
   return render(
     c,
-    <Layout title={game.name} active="game">
+    <Layout title={game.name} active="game" head={<GameMeta origin={new URL(c.req.url).origin} game={game} data={cardData(game, rows, 'nick')} hasImage={og} />}>
       {!open && <div class="warn" style="margin-bottom:12px">而家冇進行中嘅遊戲，以下係最近一場。</div>}
       <GameHeader game={game}>
         <div class="row">
@@ -114,6 +120,7 @@ app.get('/', async (c) => {
           <a class="btn primary" href={open ? '/admin/game' : '/admin'}>{open ? '編輯' : '開新局'}</a>
         </div>
       </GameHeader>
+      {closed && <CardButtons data={cardData(game, rows, names)} />}
       <GameTable game={game} rows={rows} names={names} />
       <Settlement game={game} rows={rows} names={names} />
     </Layout>,
@@ -156,17 +163,34 @@ app.get('/games', async (c) => {
   );
 });
 
+app.get('/games/:id{[0-9]+}/og.png', async (c) => {
+  const row = await c.env.DB.prepare('SELECT png_b64, updated_at FROM game_cards WHERE game_id = ?')
+    .bind(Number(c.req.param('id')))
+    .first<{ png_b64: string; updated_at: string }>();
+  if (!row) return c.notFound();
+  return c.body(fromB64(row.png_b64), 200, {
+    'content-type': 'image/png',
+    'cache-control': 'public, max-age=3600',
+    'last-modified': new Date(row.updated_at.replace(' ', 'T') + 'Z').toUTCString(),
+  });
+});
+
 app.get('/games/:id{[0-9]+}', async (c) => {
   const { names } = prefs(c);
   const game = await getGame(c.env.DB, Number(c.req.param('id')));
   if (!game) return render(c, <Layout title="搵唔到"><div class="card">搵唔到呢場遊戲。</div></Layout>, 404);
   const rows = await getRows(c.env.DB, game.id);
+  const closed = game.status === 'closed';
+  const og = closed && (await hasCard(c.env.DB, game.id));
+  // ?og=1 right after closing: the admin's browser renders the preview image and uploads it
+  const autoUpload = closed && c.req.query('og') === '1' ? cardData(game, rows, 'nick') : undefined;
   return render(
     c,
-    <Layout title={game.name} active="games">
+    <Layout title={game.name} active="games" head={<GameMeta origin={new URL(c.req.url).origin} game={game} data={cardData(game, rows, 'nick')} hasImage={og} />}>
       <GameHeader game={game}>
         <Toggles names={names} back={`/games/${game.id}`} />
       </GameHeader>
+      {closed && <CardButtons data={cardData(game, rows, names)} autoUpload={autoUpload} />}
       <GameTable game={game} rows={rows} names={names} />
       <Settlement game={game} rows={rows} names={names} />
       {rows.some((r) => r.memo) && (
@@ -706,7 +730,10 @@ app.get('/admin', async (c) => {
     <Layout title="開新局" admin={c.get('email')}>
       <div class="row" style="justify-content:space-between">
         <h1>開新局</h1>
-        <a class="btn" href="/admin/players">玩家管理</a>
+        <div class="row">
+          <a class="btn" href="/admin/cards">連結預覽圖</a>
+          <a class="btn" href="/admin/players">玩家管理</a>
+        </div>
       </div>
       <Msg c={c} />
       <form class="card" method="post" action="/admin/games">
@@ -1139,7 +1166,92 @@ app.post('/admin/game/close', async (c) => {
       .prepare("UPDATE games SET status = 'closed', host_player_id = ?, diff_mode = ?, diff_chips = ?, closed_by = ?, closed_at = datetime('now') WHERE id = ? AND status = 'open'")
       .bind(host, res.usedMode, res.diff, c.get('email'), game.id),
   ]);
-  return c.redirect(`/games/${game.id}`, 303);
+  return c.redirect(`/games/${game.id}?og=1`, 303);
+});
+
+app.post('/admin/games/:id{[0-9]+}/card', async (c) => {
+  const id = Number(c.req.param('id'));
+  const game = await getGame(c.env.DB, id);
+  if (!game || game.status !== 'closed') return c.text('Game not found or not closed', 404);
+  const buf = await c.req.arrayBuffer();
+  if (buf.byteLength > 1024 * 1024) return c.text('Image too large', 413);
+  if (!isPng(new Uint8Array(buf))) return c.text('Not a PNG', 415);
+  await c.env.DB.prepare(
+    `INSERT INTO game_cards (game_id, png_b64, updated_at) VALUES (?, ?, datetime('now'))
+     ON CONFLICT(game_id) DO UPDATE SET png_b64 = excluded.png_b64, updated_at = excluded.updated_at`,
+  )
+    .bind(id, toB64(buf))
+    .run();
+  return c.body(null, 204);
+});
+
+app.get('/admin/cards', async (c) => {
+  const db = c.env.DB;
+  const [{ results: games }, { results: rows }, { results: cards }] = await db.batch([
+    db.prepare("SELECT * FROM games WHERE status = 'closed' ORDER BY date DESC, id DESC"),
+    db.prepare(
+      `SELECT gp.*, p.name, p.nickname FROM game_players gp JOIN players p ON p.id = gp.player_id
+       JOIN games g ON g.id = gp.game_id WHERE g.status = 'closed' ORDER BY gp.sort_order, gp.player_id`,
+    ),
+    db.prepare('SELECT game_id, updated_at, length(png_b64) AS len FROM game_cards'),
+  ]);
+  const byGame = new Map<number, GameRow[]>();
+  for (const r of rows as GameRow[]) {
+    if (!byGame.has(r.game_id)) byGame.set(r.game_id, []);
+    byGame.get(r.game_id)!.push(r);
+  }
+  const have = new Map((cards as { game_id: number; updated_at: string; len: number }[]).map((x) => [x.game_id, x]));
+  const data = (games as Game[]).map((g) => ({ ...cardData(g, byGame.get(g.id) ?? [], 'nick'), has: have.has(g.id) }));
+  return render(
+    c,
+    <Layout title="連結預覽圖" admin={c.get('email')}>
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <h1>連結預覽圖</h1>
+          <div class="sub">og:image 用嘅成績卡（1200×630，綽號）。結束遊戲時會自動生成；舊局可以喺度補。</div>
+        </div>
+        <a class="btn" href="/admin">返回</a>
+      </div>
+      <div class="card">
+        <div class="row">
+          <button type="button" class="btn primary" id="genMissing">生成缺少嘅（{data.filter((d) => !d.has).length}）</button>
+          <button type="button" class="btn" id="genAll">全部重新生成（{data.length}）</button>
+          <span class="sub" id="genMsg"></span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>遊戲</th><th>日期</th><th>預覽圖</th></tr></thead>
+            <tbody>
+              {(games as Game[]).map((g) => (
+                <tr>
+                  <td class="name"><a href={`/games/${g.id}`}>{g.name}</a></td>
+                  <td>{g.date}</td>
+                  <td id={`st-${g.id}`}>
+                    {have.has(g.id) ? <a href={`/games/${g.id}/og.png`}>{Math.round((have.get(g.id)!.len * 3) / 4 / 1024)} KB</a> : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `${CARD_JS}
+(function(){var D=${cardJson(data)},m=document.getElementById('genMsg'),busy=false;
+function run(list){if(busy)return;busy=true;var i=0,ok=0;
+  (function next(){if(i>=list.length){m.textContent='完成：'+ok+' / '+list.length;busy=false;return}
+    var d=list[i++];m.textContent='生成中 '+i+' / '+list.length+'…';
+    PokerCard.upload(d).then(function(r){if(r){ok++;document.getElementById('st-'+d.id).textContent='✓'}}).catch(function(){}).then(next);
+  })();}
+document.getElementById('genMissing').onclick=function(){run(D.filter(function(d){return !d.has}))};
+document.getElementById('genAll').onclick=function(){run(D)};})();`,
+        }}
+      />
+    </Layout>,
+  );
 });
 
 app.get('/admin/seats', async (c) => {
