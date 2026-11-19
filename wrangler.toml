@@ -10,7 +10,12 @@ routes = [{ pattern = "poker.kitchow.dev", custom_domain = true }]
 # (Workers & Pages → poker-tracker → Observability / Logs).
 [observability]
 enabled = true
+
+[observability.logs]
+enabled = true
 head_sampling_rate = 1   # log every request; the app's traffic is tiny
+invocation_logs = true   # one log per request (method, URL, status, CPU time)
+persist = true           # keep logs in the dashboard, not only in `wrangler tail`
 
 [[d1_databases]]
 binding = "DB"

@@ -4,6 +4,7 @@ import { getCookie, setCookie } from 'hono/cookie';
 import { requireAccess } from './auth';
 import {
   allocateDiff,
+  changes,
   chipTotal,
   parseChips,
   type ChipCounts,
@@ -78,6 +79,15 @@ const intOrNull = (v: unknown) => {
 };
 const go = (c: Context, path: string, msg?: string) =>
   c.redirect(msg ? `${path}${path.includes('?') ? '&' : '?'}msg=${encodeURIComponent(msg)}` : path, 303);
+
+/**
+ * Audit log: one JSON line per successful admin change, so Workers Logs can answer
+ * "who did what, when". Filter in the dashboard with type = "audit".
+ */
+function audit(c: Context<AppEnv>, action: string, data: Record<string, unknown>) {
+  console.log(JSON.stringify({ level: 'info', type: 'audit', action, admin: c.get('email'), ...data }));
+}
+const playerRef = (p: { player_id?: number; id?: number; name: string }) => ({ player_id: p.player_id ?? p.id, player: p.name });
 
 const Msg = ({ c }: { c: Context }) => {
   const m = c.req.query('msg');
@@ -662,26 +672,26 @@ app.post('/admin/games', async (c) => {
   const max = await db.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM games').first<{ m: number }>();
   const id = (max?.m ?? 0) + 1;
   const date = /^\d{4}-\d{2}-\d{2}$/.test(String(f.date)) ? String(f.date) : vancouverToday();
+  const g = {
+    name: String(f.name || `Poker Game # ${id}`).trim(),
+    date,
+    base_buyin: Math.max(1, Math.trunc(num(f.base_buyin, 1000))),
+    cash: Math.max(0, num(f.cash, 20)),
+    bb_size: Math.max(1, Math.trunc(num(f.bb_size, 2))),
+    include_dashboard: f.include_dashboard ? 1 : 0,
+  };
   try {
     await db
       .prepare(
         `INSERT INTO games (id, name, date, base_buyin, cash, bb_size, include_dashboard, status, created_by)
          VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?)`,
       )
-      .bind(
-        id,
-        String(f.name || `Poker Game # ${id}`).trim(),
-        date,
-        Math.max(1, Math.trunc(num(f.base_buyin, 1000))),
-        Math.max(0, num(f.cash, 20)),
-        Math.max(1, Math.trunc(num(f.bb_size, 2))),
-        f.include_dashboard ? 1 : 0,
-        c.get('email'),
-      )
+      .bind(id, g.name, g.date, g.base_buyin, g.cash, g.bb_size, g.include_dashboard, c.get('email'))
       .run();
   } catch {
     return go(c, '/admin', '開局失敗：可能已經有進行中嘅遊戲。');
   }
+  audit(c, 'game.create', { game_id: id, ...g });
   return c.redirect('/admin/game', 303);
 });
 
@@ -949,27 +959,31 @@ app.post('/admin/game/meta', async (c) => {
   if (!game) return c.redirect('/admin', 303);
   const f = await c.req.parseBody();
   const date = /^\d{4}-\d{2}-\d{2}$/.test(String(f.date)) ? String(f.date) : game.date;
+  const next = {
+    name: String(f.name || game.name).trim(),
+    date,
+    base_buyin: Math.max(1, Math.trunc(num(f.base_buyin, game.base_buyin))),
+    cash: Math.max(0, num(f.cash, game.cash)),
+    bb_size: Math.max(1, Math.trunc(num(f.bb_size, game.bb_size))),
+    include_dashboard: f.include_dashboard ? 1 : 0,
+  };
   await c.env.DB.prepare('UPDATE games SET name = ?, date = ?, base_buyin = ?, cash = ?, bb_size = ?, include_dashboard = ? WHERE id = ?')
-    .bind(
-      String(f.name || game.name).trim(),
-      date,
-      Math.max(1, Math.trunc(num(f.base_buyin, game.base_buyin))),
-      Math.max(0, num(f.cash, game.cash)),
-      Math.max(1, Math.trunc(num(f.bb_size, game.bb_size))),
-      f.include_dashboard ? 1 : 0,
-      game.id,
-    )
+    .bind(next.name, next.date, next.base_buyin, next.cash, next.bb_size, next.include_dashboard, game.id)
     .run();
+  const diff = changes(game, next);
+  if (Object.keys(diff).length) audit(c, 'game.update', { game_id: game.id, changes: diff });
   return go(c, '/admin/game', '設定已儲存。');
 });
 
 app.post('/admin/game/delete', async (c) => {
   const game = await requireOpen(c);
   if (!game) return c.redirect('/admin', 303);
+  const rows = await getRows(c.env.DB, game.id);
   await c.env.DB.batch([
     c.env.DB.prepare('DELETE FROM game_players WHERE game_id = ?').bind(game.id),
     c.env.DB.prepare("DELETE FROM games WHERE id = ? AND status = 'open'").bind(game.id),
   ]);
+  audit(c, 'game.delete', { game_id: game.id, name: game.name, players: rows.map((r) => ({ ...playerRef(r), buyin: r.buyin })) });
   return go(c, '/admin', `已刪除 ${game.name}。`);
 });
 
@@ -992,6 +1006,7 @@ app.post('/admin/game/add', async (c) => {
     const id = (max?.m ?? 0) + 1;
     await db.prepare('INSERT INTO players (id, name, nickname) VALUES (?, ?, ?)').bind(id, name, nick).run();
     player = { id, name, nickname: nick, rep_hand: null };
+    audit(c, 'player.create', { player_id: id, player: name, nickname: nick, via: 'game' });
   }
   const exists = await db.prepare('SELECT 1 FROM game_players WHERE game_id = ? AND player_id = ?').bind(game.id, player.id).first();
   if (exists) return go(c, '/admin/game', `${player.name} 已經喺呢場。`);
@@ -1000,6 +1015,7 @@ app.post('/admin/game/add', async (c) => {
     .prepare('INSERT INTO game_players (game_id, player_id, buyin, sort_order) VALUES (?, ?, ?, ?)')
     .bind(game.id, player.id, game.base_buyin, order?.o ?? 1)
     .run();
+  audit(c, 'game.player_add', { game_id: game.id, ...playerRef(player), buyin: game.base_buyin });
   return c.redirect('/admin/game', 303);
 });
 
@@ -1008,16 +1024,27 @@ app.post('/admin/game/buyin', async (c) => {
   if (!game) return c.redirect('/admin', 303);
   const f = await c.req.parseBody();
   const pid = Math.trunc(num(f.player_id, -1));
+  const before = await c.env.DB.prepare(
+    'SELECT gp.buyin, p.name FROM game_players gp JOIN players p ON p.id = gp.player_id WHERE gp.game_id = ? AND gp.player_id = ?',
+  )
+    .bind(game.id, pid)
+    .first<{ buyin: number; name: string }>();
+  if (!before) return c.redirect('/admin/game', 303);
+  let after: number;
   if (f.set !== undefined) {
     const v = intOrNull(f.set);
     if (v === null) return go(c, '/admin/game', '籌碼數目唔啱。');
     await c.env.DB.prepare('UPDATE game_players SET buyin = ? WHERE game_id = ? AND player_id = ?').bind(v, game.id, pid).run();
+    after = v;
   } else {
     const delta = num(f.delta) > 0 ? game.base_buyin : -game.base_buyin;
     await c.env.DB.prepare('UPDATE game_players SET buyin = MAX(0, buyin + ?) WHERE game_id = ? AND player_id = ?')
       .bind(delta, game.id, pid)
       .run();
+    after = Math.max(0, before.buyin + delta);
   }
+  if (after !== before.buyin)
+    audit(c, 'game.buyin', { game_id: game.id, player_id: pid, player: before.name, how: f.set !== undefined ? 'set' : num(f.delta) > 0 ? '+1' : '-1', before: before.buyin, after });
   return c.redirect('/admin/game', 303);
 });
 
@@ -1025,9 +1052,11 @@ app.post('/admin/game/remove', async (c) => {
   const game = await requireOpen(c);
   if (!game) return c.redirect('/admin', 303);
   const f = await c.req.parseBody();
-  await c.env.DB.prepare('DELETE FROM game_players WHERE game_id = ? AND player_id = ?')
-    .bind(game.id, Math.trunc(num(f.player_id, -1)))
-    .run();
+  const pid = Math.trunc(num(f.player_id, -1));
+  const row = (await getRows(c.env.DB, game.id)).find((r) => r.player_id === pid);
+  if (!row) return c.redirect('/admin/game', 303);
+  await c.env.DB.prepare('DELETE FROM game_players WHERE game_id = ? AND player_id = ?').bind(game.id, pid).run();
+  audit(c, 'game.player_remove', { game_id: game.id, ...playerRef(row), buyin: row.buyin, end_chips: row.end_chips });
   return c.redirect('/admin/game', 303);
 });
 
@@ -1037,6 +1066,7 @@ app.post('/admin/game/chips', async (c) => {
   if (!game) return c.redirect('/admin', 303);
   const f = await c.req.parseBody();
   const rows = await getRows(db, game.id);
+  const changed: Record<string, unknown>[] = [];
   const stmts = rows.map((r) => {
     const counts: ChipCounts = {};
     for (const d of DENOMS) {
@@ -1044,11 +1074,14 @@ app.post('/admin/game/chips', async (c) => {
       if (n !== null) counts[String(d.value)] = n;
     }
     const json = Object.keys(counts).length ? JSON.stringify(counts) : null;
+    const total = chipTotal(counts);
+    if (json !== r.chips) changed.push({ ...playerRef(r), before: r.end_chips, after: total, chips: counts });
     return db
       .prepare('UPDATE game_players SET chips = ?, end_chips = ? WHERE game_id = ? AND player_id = ?')
-      .bind(json, chipTotal(counts), game.id, r.player_id);
+      .bind(json, total, game.id, r.player_id);
   });
   if (stmts.length) await db.batch(stmts);
+  if (changed.length) audit(c, 'game.chips', { game_id: game.id, players: changed });
   return c.redirect('/admin/game#close', 303);
 });
 
@@ -1069,6 +1102,18 @@ app.post('/admin/game/close', async (c) => {
       .prepare("UPDATE games SET status = 'closed', host_player_id = ?, diff_mode = ?, diff_chips = ?, closed_by = ?, closed_at = datetime('now') WHERE id = ? AND status = 'open'")
       .bind(host, res.usedMode, res.diff, c.get('email'), game.id),
   ]);
+  audit(c, 'game.close', {
+    game_id: game.id,
+    name: game.name,
+    host_player_id: host,
+    host: rows.find((r) => r.player_id === host)?.name,
+    diff_mode: res.usedMode,
+    diff_chips: res.diff,
+    results: rows.map((r) => {
+      const adj = res.adj.get(r.player_id) ?? 0;
+      return { ...playerRef(r), buyin: r.buyin, end_chips: r.end_chips, adj, net: (r.end_chips ?? 0) + adj - r.buyin };
+    }),
+  });
   return c.redirect(`/games/${game.id}?og=1`, 303);
 });
 
@@ -1085,6 +1130,7 @@ app.post('/admin/games/:id{[0-9]+}/card', async (c) => {
   )
     .bind(id, toB64(buf))
     .run();
+  audit(c, 'card.upload', { game_id: id, bytes: buf.byteLength });
   return c.body(null, 204);
 });
 
@@ -1202,13 +1248,14 @@ app.post('/admin/players', async (c) => {
   const name = String(f.name ?? '').trim().slice(0, 60);
   if (!name) return go(c, '/admin/players', '請輸入本名。');
   const max = await c.env.DB.prepare('SELECT COALESCE(MAX(id), 0) AS m FROM players').first<{ m: number }>();
+  const id = (max?.m ?? 0) + 1;
+  const nickname = String(f.nickname ?? '').trim().slice(0, 60) || null;
   try {
-    await c.env.DB.prepare('INSERT INTO players (id, name, nickname) VALUES (?, ?, ?)')
-      .bind((max?.m ?? 0) + 1, name, String(f.nickname ?? '').trim().slice(0, 60) || null)
-      .run();
+    await c.env.DB.prepare('INSERT INTO players (id, name, nickname) VALUES (?, ?, ?)').bind(id, name, nickname).run();
   } catch {
     return go(c, '/admin/players', `已經有玩家叫「${name}」。`);
   }
+  audit(c, 'player.create', { player_id: id, player: name, nickname, via: 'players' });
   return go(c, '/admin/players', `已新增 ${name}。`);
 });
 
@@ -1218,13 +1265,20 @@ app.post('/admin/players/:id{[0-9]+}', async (c) => {
   const f = await c.req.parseBody();
   const name = String(f.name ?? '').trim().slice(0, 60);
   if (!name) return go(c, '/admin/players', '本名唔可以留空。');
+  const before = await c.env.DB.prepare('SELECT name, nickname, rep_hand FROM players WHERE id = ?').bind(id).first<Pick<Player, 'name' | 'nickname' | 'rep_hand'>>();
+  if (!before) return go(c, '/admin/players', '搵唔到呢位玩家。');
+  const next = {
+    name,
+    nickname: String(f.nickname ?? '').trim().slice(0, 60) || null,
+    rep_hand: String(f.rep_hand ?? '').trim().slice(0, 10) || null,
+  };
   try {
-    await c.env.DB.prepare('UPDATE players SET name = ?, nickname = ?, rep_hand = ? WHERE id = ?')
-      .bind(name, String(f.nickname ?? '').trim().slice(0, 60) || null, String(f.rep_hand ?? '').trim().slice(0, 10) || null, id)
-      .run();
+    await c.env.DB.prepare('UPDATE players SET name = ?, nickname = ?, rep_hand = ? WHERE id = ?').bind(next.name, next.nickname, next.rep_hand, id).run();
   } catch {
     return go(c, '/admin/players', `已經有玩家叫「${name}」。`);
   }
+  const diff = changes(before, next);
+  if (Object.keys(diff).length) audit(c, 'player.update', { player_id: id, player: name, changes: diff });
   return go(c, '/admin/players', `已更新 ${name}。`);
 });
 
