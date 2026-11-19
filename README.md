@@ -61,6 +61,20 @@ npm run deploy
 
 500 頁面會顯示 Cloudflare Ray ID，用佢喺 log 入面搜尋就搵到對應嗰條記錄。
 
+### Admin 操作記錄（audit log）
+
+每個成功嘅 admin 改動都會寫一行 JSON，`type` 係 `audit`，有 `action` 同 `admin`（Access 登入嘅 email）。喺 dashboard 用 `type = "audit"` 篩選就係完整操作時間線；加 `game_id = 91` 只睇某一局。
+
+| action | 內容 |
+|---|---|
+| `game.create` / `game.update` / `game.delete` | 開局設定；改咗嘅欄位（before／after）；刪除時嘅玩家同買入 |
+| `game.player_add` / `game.player_remove` | 邊個玩家、當時買入 |
+| `game.buyin` | `+1`／`-1`／`set`，before → after |
+| `game.chips` | 有變動嘅玩家點數，before → after |
+| `game.close` | host、差額處理、每人買入／最後籌碼／調整／淨額 |
+| `player.create` / `player.update` | 新玩家；改咗嘅本名／綽號／代表手牌 |
+| `card.upload` | 連結預覽圖大小 |
+
 ## 本地開發
 
 ```bash

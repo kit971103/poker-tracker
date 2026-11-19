@@ -246,3 +246,14 @@ export function settle(balances: { id: number; cents: number }[]): { transfers: 
 }
 
 export const dollars = (cents: number) => '$' + fmt(cents / 100, 2);
+
+// ---------------------------------------------------------------- audit log
+
+/** Fields whose value differs, as { field: { before, after } }. Empty object when nothing changed. */
+export function changes<T extends Record<string, unknown>>(before: T, after: Partial<T>): Record<string, { before: unknown; after: unknown }> {
+  const out: Record<string, { before: unknown; after: unknown }> = {};
+  for (const k of Object.keys(after)) {
+    if ((before[k] ?? null) !== (after[k] ?? null)) out[k] = { before: before[k] ?? null, after: after[k] ?? null };
+  }
+  return out;
+}
