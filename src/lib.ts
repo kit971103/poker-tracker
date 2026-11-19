@@ -166,6 +166,43 @@ export const signed = (n: number, digits = 0) => (n > 0 ? '+' : n < 0 ? '−' : 
 
 export const money = (n: number) => (n > 0 ? '+$' : n < 0 ? '−$' : '$') + fmt(Math.abs(n), 2);
 
+// ---------------------------------------------------------------- head-to-head
+
+export type H2HGame = { game_id: number; a: number; b: number };
+export type H2HCell = { n: number; diff: number; wins: number; losses: number; games: H2HGame[] };
+
+/**
+ * Pairwise comparison over co-attended games only.
+ * diff(A,B) = Σ (net_A − net_B) / 2 — antisymmetric by construction, and equal to A's own result
+ * in a heads-up game (net_B = −net_A). wins = games where A finished ahead of B.
+ */
+export function headToHead(rows: { game_id: number; player_id: number; v: number }[]): Map<string, H2HCell> {
+  const byGame = new Map<number, { player_id: number; v: number }[]>();
+  for (const r of rows) {
+    if (!byGame.has(r.game_id)) byGame.set(r.game_id, []);
+    byGame.get(r.game_id)!.push(r);
+  }
+  const out = new Map<string, H2HCell>();
+  const cell = (a: number, b: number) => {
+    const k = `${a}:${b}`;
+    let c = out.get(k);
+    if (!c) out.set(k, (c = { n: 0, diff: 0, wins: 0, losses: 0, games: [] }));
+    return c;
+  };
+  for (const [game_id, ps] of byGame) {
+    for (const x of ps)
+      for (const y of ps) {
+        if (x.player_id === y.player_id) continue;
+        const c = cell(x.player_id, y.player_id);
+        c.n++;
+        c.diff += (x.v - y.v) / 2;
+        if (x.v > y.v) c.wins++;
+        else if (x.v < y.v) c.losses++;
+        c.games.push({ game_id, a: x.v, b: y.v });
+      }
+  }
+  return out;
+}
 // ---------------------------------------------------------------- settlement
 
 /**

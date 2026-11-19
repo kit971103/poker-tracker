@@ -11,6 +11,7 @@ import {
   displayName,
   dollarsPerChip,
   fmt,
+  headToHead,
   money,
   net,
   signed,
@@ -331,6 +332,131 @@ if(!window.Chart)return;new Chart(document.getElementById('chart'),{type:'line',
 options:{maintainAspectRatio:false,interaction:{mode:'index',intersect:false},plugins:{legend:{labels:{color:ink,boxWidth:12}}},scales:{x:{ticks:{color:ink,maxTicksLimit:8}},y:{ticks:{color:ink}}}}});})();`,
         }}
       />
+    </Layout>,
+  );
+});
+
+app.get('/h2h', async (c) => {
+  const { names, unit } = prefs(c);
+  const minGames = Math.max(1, Math.trunc(num(c.req.query('min'), 5)));
+  const k = Math.max(1, Math.trunc(num(c.req.query('k'), 5)));
+  const qa = Math.trunc(num(c.req.query('a'), NaN));
+  const qb = Math.trunc(num(c.req.query('b'), NaN));
+  const { results } = await c.env.DB.prepare(
+    `SELECT g.id AS game_id, g.name AS game, g.date, g.bb_size, gp.player_id, p.name, p.nickname,
+            gp.end_chips + gp.adj - gp.buyin AS v
+     FROM game_players gp JOIN games g ON g.id = gp.game_id JOIN players p ON p.id = gp.player_id
+     WHERE g.status = 'closed' AND g.include_dashboard = 1 AND gp.player_id <> 0
+     ORDER BY g.date DESC, g.id DESC`,
+  ).all<{ game_id: number; game: string; date: string; bb_size: number; player_id: number; name: string; nickname: string | null; v: number }>();
+
+  const val = (r: { v: number; bb_size: number }) => (unit === 'bb' ? r.v / r.bb_size : r.v);
+  const m = headToHead(results.map((r) => ({ game_id: r.game_id, player_id: r.player_id, v: val(r) })));
+  const games = new Map(results.map((r) => [r.game_id, r]));
+  const people = new Map<number, { id: number; name: string; nickname: string | null; n: number }>();
+  for (const r of results) {
+    const p = people.get(r.player_id) ?? { id: r.player_id, name: r.name, nickname: r.nickname, n: 0 };
+    p.n++;
+    people.set(r.player_id, p);
+  }
+  const list = [...people.values()].filter((p) => p.n >= minGames).sort((a, b) => b.n - a.n || a.name.localeCompare(b.name));
+  const d = unit === 'bb' ? 1 : 0;
+  const unitLabel = unit === 'bb' ? 'BB' : '籌碼';
+  const back = `/h2h?${new URLSearchParams({ min: String(minGames), k: String(k), ...(Number.isFinite(qa) ? { a: String(qa), b: String(qb) } : {}) })}`;
+  const detail = Number.isFinite(qa) && Number.isFinite(qb) ? m.get(`${qa}:${qb}`) : undefined;
+  const pa = people.get(qa);
+  const pb = people.get(qb);
+
+  return render(
+    c,
+    <Layout title="對戰矩陣" active="h2h">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <h1>對戰矩陣</h1>
+          <div class="sub">只計兩人同場、已結束並計入 Dashboard 嘅局。</div>
+        </div>
+        <Toggles names={names} unit={unit} back={back} />
+      </div>
+
+      {detail && pa && pb && (
+        <div class="card">
+          <div class="row" style="justify-content:space-between">
+            <b>
+              {displayName(pa, names)} 對 {displayName(pb, names)}
+            </b>
+            <a class="btn sm" href={`/h2h?min=${minGames}&k=${k}`}>關閉</a>
+          </div>
+          <div class="sub" style="margin:4px 0 8px">
+            同場 {detail.n} 局 · {displayName(pa, names)} 贏多過對方 {detail.wins} 局（{fmt((detail.wins / detail.n) * 100)}%）· 淨差{' '}
+            <Signed n={detail.diff} digits={d} /> {unitLabel}
+          </div>
+          <div class="tbl-wrap">
+            <table>
+              <thead>
+                <tr><th>遊戲</th><th>日期</th><th>{displayName(pa, names)}</th><th>{displayName(pb, names)}</th><th>(A − B) / 2</th></tr>
+              </thead>
+              <tbody>
+                {detail.games.map((x) => {
+                  const g = games.get(x.game_id)!;
+                  return (
+                    <tr>
+                      <td class="name"><a href={`/games/${x.game_id}`}>{g.game}</a></td>
+                      <td>{g.date}</td>
+                      <td><Signed n={x.a} digits={d} /></td>
+                      <td><Signed n={x.b} digits={d} /></td>
+                      <td><Signed n={(x.a - x.b) / 2} digits={d} /></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <form method="get" action="/h2h" class="row" style="margin-top:12px">
+        <label>最少場數 <input type="number" name="min" value={String(minGames)} min="1" /></label>
+        <label>低信心門檻 K <input type="number" name="k" value={String(k)} min="1" /></label>
+        <button class="btn sm">更新</button>
+      </form>
+
+      <div class="card">
+        <div class="mx-wrap">
+          <table class="mx">
+            <thead>
+              <tr>
+                <th>A ＼ B</th>
+                {list.map((b) => <th>{displayName(b, names)}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((a) => (
+                <tr>
+                  <th>{displayName(a, names)}</th>
+                  {list.map((b) => {
+                    if (a.id === b.id) return <td class="self"></td>;
+                    const x = m.get(`${a.id}:${b.id}`);
+                    if (!x) return <td class="none" title="未曾同場">·</td>;
+                    return (
+                      <td class={x.n < k ? 'low' : ''} title={`${displayName(a, names)} 對 ${displayName(b, names)}：同場 ${x.n} 局，贏多過對方 ${x.wins} 局`}>
+                        <a href={`/h2h?min=${minGames}&k=${k}&a=${a.id}&b=${b.id}`}>
+                          <Signed n={x.diff} digits={d} />
+                          <small>{x.n} 局 · {fmt((x.wins / x.n) * 100)}%</small>
+                        </a>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p class="sub">
+        格 (A, B) = 同場時 Σ(A 盈虧 − B 盈虧) / 2（{unitLabel}），即「A 相對 B 嘅淨差」；只得兩人嘅局就等於 A 嘅實際盈虧，所以 (A, B) = −(B, A)。
+        下面一行係同場局數同 A 名次高過 B 嘅局數佔比。同場少過 K 局嘅格會變淡（低信心）。
+        注意：多人局嘅盈虧唔係真正 head-to-head，呢個矩陣反映相關性，唔代表 A 直接贏咗 B 嘅錢。
+      </p>
     </Layout>,
   );
 });
