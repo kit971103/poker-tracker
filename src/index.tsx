@@ -11,6 +11,7 @@ import {
   displayName,
   dollarsPerChip,
   fmt,
+  headToHead,
   money,
   net,
   signed,
@@ -22,10 +23,12 @@ import {
   type Player,
   type Unit,
 } from './lib';
-import { Chip, GameHeader, GameTable, Layout, Signed, Toggles } from './views';
+import { Chip, GameHeader, GameTable, Layout, Settlement, Signed, Toggles } from './views';
 import { EquityPage } from './equity';
 import { RangePage } from './range';
 import { APPLE_TOUCH_ICON_PNG, FAVICON_SVG } from './icon';
+import { CARD_JS, CardButtons, cardData, cardJson, fromB64, GameMeta, isPng, toB64 } from './card';
+import { drawSeats, seedInput, sha256Hex } from './seats';
 
 type AppEnv = { Bindings: Env; Variables: { email: string } };
 const app = new Hono<AppEnv>();
@@ -60,6 +63,9 @@ async function getRows(db: D1Database, gameId: number) {
     .bind(gameId)
     .all<GameRow>();
   return results;
+}
+async function hasCard(db: D1Database, gameId: number) {
+  return !!(await db.prepare('SELECT 1 FROM game_cards WHERE game_id = ?').bind(gameId).first());
 }
 const num = (v: unknown, d = 0) => {
   const n = Number(v);
@@ -103,9 +109,11 @@ app.get('/', async (c) => {
     return render(c, <Layout title="當前遊戲" active="game"><div class="card">未有任何遊戲。<a href="/admin">開新局</a></div></Layout>);
   }
   const rows = await getRows(c.env.DB, game.id);
+  const closed = game.status === 'closed';
+  const og = closed && (await hasCard(c.env.DB, game.id));
   return render(
     c,
-    <Layout title={game.name} active="game">
+    <Layout title={game.name} active="game" head={<GameMeta origin={new URL(c.req.url).origin} game={game} data={cardData(game, rows, 'nick')} hasImage={og} />}>
       {!open && <div class="warn" style="margin-bottom:12px">而家冇進行中嘅遊戲，以下係最近一場。</div>}
       <GameHeader game={game}>
         <div class="row">
@@ -113,7 +121,9 @@ app.get('/', async (c) => {
           <a class="btn primary" href={open ? '/admin/game' : '/admin'}>{open ? '編輯' : '開新局'}</a>
         </div>
       </GameHeader>
+      {closed && <CardButtons data={cardData(game, rows, names)} />}
       <GameTable game={game} rows={rows} names={names} />
+      <Settlement game={game} rows={rows} names={names} />
     </Layout>,
   );
 });
@@ -154,18 +164,36 @@ app.get('/games', async (c) => {
   );
 });
 
+app.get('/games/:id{[0-9]+}/og.png', async (c) => {
+  const row = await c.env.DB.prepare('SELECT png_b64, updated_at FROM game_cards WHERE game_id = ?')
+    .bind(Number(c.req.param('id')))
+    .first<{ png_b64: string; updated_at: string }>();
+  if (!row) return c.notFound();
+  return c.body(fromB64(row.png_b64), 200, {
+    'content-type': 'image/png',
+    'cache-control': 'public, max-age=3600',
+    'last-modified': new Date(row.updated_at.replace(' ', 'T') + 'Z').toUTCString(),
+  });
+});
+
 app.get('/games/:id{[0-9]+}', async (c) => {
   const { names } = prefs(c);
   const game = await getGame(c.env.DB, Number(c.req.param('id')));
   if (!game) return render(c, <Layout title="搵唔到"><div class="card">搵唔到呢場遊戲。</div></Layout>, 404);
   const rows = await getRows(c.env.DB, game.id);
+  const closed = game.status === 'closed';
+  const og = closed && (await hasCard(c.env.DB, game.id));
+  // ?og=1 right after closing: the admin's browser renders the preview image and uploads it
+  const autoUpload = closed && c.req.query('og') === '1' ? cardData(game, rows, 'nick') : undefined;
   return render(
     c,
-    <Layout title={game.name} active="games">
+    <Layout title={game.name} active="games" head={<GameMeta origin={new URL(c.req.url).origin} game={game} data={cardData(game, rows, 'nick')} hasImage={og} />}>
       <GameHeader game={game}>
         <Toggles names={names} back={`/games/${game.id}`} />
       </GameHeader>
+      {closed && <CardButtons data={cardData(game, rows, names)} autoUpload={autoUpload} />}
       <GameTable game={game} rows={rows} names={names} />
+      <Settlement game={game} rows={rows} names={names} />
       {rows.some((r) => r.memo) && (
         <div class="card sub">
           {rows.filter((r) => r.memo).map((r) => (
@@ -334,6 +362,246 @@ options:{maintainAspectRatio:false,interaction:{mode:'index',intersect:false},pl
   );
 });
 
+app.get('/h2h', async (c) => {
+  const { names, unit } = prefs(c);
+  const minGames = Math.max(1, Math.trunc(num(c.req.query('min'), 5)));
+  const k = Math.max(1, Math.trunc(num(c.req.query('k'), 5)));
+  const qa = Math.trunc(num(c.req.query('a'), NaN));
+  const qb = Math.trunc(num(c.req.query('b'), NaN));
+  const { results } = await c.env.DB.prepare(
+    `SELECT g.id AS game_id, g.name AS game, g.date, g.bb_size, gp.player_id, p.name, p.nickname,
+            gp.end_chips + gp.adj - gp.buyin AS v
+     FROM game_players gp JOIN games g ON g.id = gp.game_id JOIN players p ON p.id = gp.player_id
+     WHERE g.status = 'closed' AND g.include_dashboard = 1 AND gp.player_id <> 0
+     ORDER BY g.date DESC, g.id DESC`,
+  ).all<{ game_id: number; game: string; date: string; bb_size: number; player_id: number; name: string; nickname: string | null; v: number }>();
+
+  const val = (r: { v: number; bb_size: number }) => (unit === 'bb' ? r.v / r.bb_size : r.v);
+  const m = headToHead(results.map((r) => ({ game_id: r.game_id, player_id: r.player_id, v: val(r) })));
+  const games = new Map(results.map((r) => [r.game_id, r]));
+  const people = new Map<number, { id: number; name: string; nickname: string | null; n: number }>();
+  for (const r of results) {
+    const p = people.get(r.player_id) ?? { id: r.player_id, name: r.name, nickname: r.nickname, n: 0 };
+    p.n++;
+    people.set(r.player_id, p);
+  }
+  const list = [...people.values()].filter((p) => p.n >= minGames).sort((a, b) => b.n - a.n || a.name.localeCompare(b.name));
+  const d = unit === 'bb' ? 1 : 0;
+  const unitLabel = unit === 'bb' ? 'BB' : '籌碼';
+  const back = `/h2h?${new URLSearchParams({ min: String(minGames), k: String(k), ...(Number.isFinite(qa) ? { a: String(qa), b: String(qb) } : {}) })}`;
+  const detail = Number.isFinite(qa) && Number.isFinite(qb) ? m.get(`${qa}:${qb}`) : undefined;
+  const pa = people.get(qa);
+  const pb = people.get(qb);
+
+  return render(
+    c,
+    <Layout title="對戰矩陣" active="h2h">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <h1>對戰矩陣</h1>
+          <div class="sub">只計兩人同場、已結束並計入 Dashboard 嘅局。</div>
+        </div>
+        <Toggles names={names} unit={unit} back={back} />
+      </div>
+
+      {detail && pa && pb && (
+        <div class="card">
+          <div class="row" style="justify-content:space-between">
+            <b>
+              {displayName(pa, names)} 對 {displayName(pb, names)}
+            </b>
+            <a class="btn sm" href={`/h2h?min=${minGames}&k=${k}`}>關閉</a>
+          </div>
+          <div class="sub" style="margin:4px 0 8px">
+            同場 {detail.n} 局 · {displayName(pa, names)} 贏多過對方 {detail.wins} 局（{fmt((detail.wins / detail.n) * 100)}%）· 淨差{' '}
+            <Signed n={detail.diff} digits={d} /> {unitLabel}
+          </div>
+          <div class="tbl-wrap">
+            <table>
+              <thead>
+                <tr><th>遊戲</th><th>日期</th><th>{displayName(pa, names)}</th><th>{displayName(pb, names)}</th><th>(A − B) / 2</th></tr>
+              </thead>
+              <tbody>
+                {detail.games.map((x) => {
+                  const g = games.get(x.game_id)!;
+                  return (
+                    <tr>
+                      <td class="name"><a href={`/games/${x.game_id}`}>{g.game}</a></td>
+                      <td>{g.date}</td>
+                      <td><Signed n={x.a} digits={d} /></td>
+                      <td><Signed n={x.b} digits={d} /></td>
+                      <td><Signed n={(x.a - x.b) / 2} digits={d} /></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <form method="get" action="/h2h" class="row" style="margin-top:12px">
+        <label>最少場數 <input type="number" name="min" value={String(minGames)} min="1" /></label>
+        <label>低信心門檻 K <input type="number" name="k" value={String(k)} min="1" /></label>
+        <button class="btn sm">更新</button>
+      </form>
+
+      <div class="card">
+        <div class="mx-wrap">
+          <table class="mx">
+            <thead>
+              <tr>
+                <th>A ＼ B</th>
+                {list.map((b) => <th>{displayName(b, names)}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((a) => (
+                <tr>
+                  <th>{displayName(a, names)}</th>
+                  {list.map((b) => {
+                    if (a.id === b.id) return <td class="self"></td>;
+                    const x = m.get(`${a.id}:${b.id}`);
+                    if (!x) return <td class="none" title="未曾同場">·</td>;
+                    return (
+                      <td class={x.n < k ? 'low' : ''} title={`${displayName(a, names)} 對 ${displayName(b, names)}：同場 ${x.n} 局，贏多過對方 ${x.wins} 局`}>
+                        <a href={`/h2h?min=${minGames}&k=${k}&a=${a.id}&b=${b.id}`}>
+                          <Signed n={x.diff} digits={d} />
+                          <small>{x.n} 局 · {fmt((x.wins / x.n) * 100)}%</small>
+                        </a>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p class="sub">
+        格 (A, B) = 同場時 Σ(A 盈虧 − B 盈虧) / 2（{unitLabel}），即「A 相對 B 嘅淨差」；只得兩人嘅局就等於 A 嘅實際盈虧，所以 (A, B) = −(B, A)。
+        下面一行係同場局數同 A 名次高過 B 嘅局數佔比。同場少過 K 局嘅格會變淡（低信心）。
+        注意：多人局嘅盈虧唔係真正 head-to-head，呢個矩陣反映相關性，唔代表 A 直接贏咗 B 嘅錢。
+      </p>
+    </Layout>,
+  );
+});
+
+type SeatDraw = {
+  id: number;
+  game_id: number | null;
+  date: string;
+  players: string;
+  seats: number;
+  nonce: string;
+  seed: string;
+  result: string;
+  button: number;
+  created_by: string | null;
+  created_at: string;
+  game_name: string | null;
+};
+
+const SeatMap = ({ result, button }: { result: (string | null)[]; button: number }) => (
+  <div class="table-oval">
+    {result.map((n, i) => {
+      // seat 1 at the bottom centre, then clockwise
+      const ang = Math.PI / 2 + (2 * Math.PI * i) / result.length;
+      const x = 50 + 44 * Math.cos(ang);
+      const y = 50 + 42 * Math.sin(ang);
+      return (
+        <div class={`seat${n === null ? ' empty' : ''}${button === i + 1 ? ' btn-d' : ''}`} style={`left:${x.toFixed(1)}%;top:${y.toFixed(1)}%`}>
+          <b>{button === i + 1 ? 'D' : i + 1}</b>
+          <span>{n ?? '空位'}</span>
+        </div>
+      );
+    })}
+  </div>
+);
+
+// esbuild's keepNames may wrap inner functions in __name(); define it so the shipped source runs as-is.
+const VERIFY_JS = `var __name=function(f){return f};
+var seedInput=${seedInput.toString()};
+var sha256Hex=${sha256Hex.toString()};
+var drawSeats=${drawSeats.toString()};
+document.querySelectorAll('[data-verify]').forEach(function(btn){btn.addEventListener('click',function(){
+  var d=JSON.parse(btn.dataset.verify),out=btn.nextElementSibling;
+  if(!window.crypto||!crypto.subtle){out.textContent='呢個瀏覽器唔支援 SHA-256（需要 HTTPS）。';return}
+  sha256Hex(seedInput(d.date,d.game_id,d.players,d.nonce)).then(function(seed){
+    var r=drawSeats(seed,d.players,d.seats);
+    var ok=seed===d.seed&&JSON.stringify(r.result)===JSON.stringify(d.result)&&r.button===d.button;
+    out.textContent=ok?'✓ 驗證通過：seed 同結果完全吻合。':'✗ 唔吻合！重新計算得 seed '+seed.slice(0,16)+'…';
+    out.className=ok?'up':'down';
+  });
+})});`;
+
+app.get('/seats', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT s.*, g.name AS game_name FROM seat_draws s LEFT JOIN games g ON g.id = s.game_id ORDER BY s.id DESC LIMIT 30`,
+  ).all<SeatDraw>();
+  // n-th draw for the same game/date, so re-draws are visible
+  const nth = new Map<number, number>();
+  const seen = new Map<string, number>();
+  for (const d of [...results].reverse()) {
+    const k = `${d.game_id ?? ''}|${d.date}`;
+    seen.set(k, (seen.get(k) ?? 0) + 1);
+    nth.set(d.id, seen.get(k)!);
+  }
+  return render(
+    c,
+    <Layout title="座位抽籤" active="seats">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <h1>座位抽籤</h1>
+          <div class="sub">每次抽籤都會記錄，重抽唔會覆寫；任何人都可以撳「驗證」喺自己部機重新計算。</div>
+        </div>
+        <a class="btn primary" href="/admin/seats">抽座位</a>
+      </div>
+      {results.length === 0 && <div class="card sub">未有抽籤紀錄。</div>}
+      {results.map((d, idx) => {
+        const players = JSON.parse(d.players) as string[];
+        const result = JSON.parse(d.result) as (string | null)[];
+        const data = { date: d.date, game_id: d.game_id, players, seats: d.seats, nonce: d.nonce, seed: d.seed, result, button: d.button };
+        return (
+          <div class="card" id={`draw-${d.id}`}>
+            <div class="row" style="justify-content:space-between">
+              <b>
+                #{d.id} · {d.game_name ?? '（冇進行中遊戲）'} · {d.date}
+              </b>
+              <span class={`pill${idx === 0 ? ' live' : ''}`}>
+                {nth.get(d.id)! > 1 ? `第 ${nth.get(d.id)} 次抽` : '第 1 次抽'}
+              </span>
+            </div>
+            <div class="sub">
+              {d.created_at} UTC{d.created_by && ` · ${d.created_by}`} · {players.length} 人 / {d.seats} 個座位
+            </div>
+            <SeatMap result={result} button={d.button} />
+            <ol style="margin:0;padding-left:22px">
+              {result.map((n, i) => (
+                <li class={n === null ? 'sub' : ''}>
+                  {n ?? '空位'} {d.button === i + 1 && <span class="dchip">D</span>}
+                </li>
+              ))}
+            </ol>
+            <details style="margin-top:8px">
+              <summary class="sub">Seed 同驗證</summary>
+              <div class="sub" style="margin-top:6px">seed = SHA-256(日期 | 遊戲 id | 排序後名單（換行分隔）| nonce)</div>
+              <div class="mono">input：{seedInput(d.date, d.game_id, players, d.nonce).replace(/\n/g, '⏎')}</div>
+              <div class="mono">seed：{d.seed}</div>
+              <div class="sub">PRNG：sfc32（seed 頭 16 bytes）· 洗牌：Fisher–Yates（rejection sampling，無偏差）· 之後喺有人嘅座位抽 button</div>
+              <div class="row" style="margin-top:6px">
+                <button type="button" class="btn sm" data-verify={JSON.stringify(data)}>驗證</button>
+                <span></span>
+              </div>
+            </details>
+          </div>
+        );
+      })}
+      <script dangerouslySetInnerHTML={{ __html: VERIFY_JS }} />
+    </Layout>,
+  );
+});
+
 app.get('/equity', (c) =>
   render(
     c,
@@ -472,7 +740,10 @@ app.get('/admin', async (c) => {
     <Layout title="開新局" admin={c.get('email')}>
       <div class="row" style="justify-content:space-between">
         <h1>開新局</h1>
-        <a class="btn" href="/admin/players">玩家管理</a>
+        <div class="row">
+          <a class="btn" href="/admin/cards">連結預覽圖</a>
+          <a class="btn" href="/admin/players">玩家管理</a>
+        </div>
       </div>
       <Msg c={c} />
       <form class="card" method="post" action="/admin/games">
@@ -555,6 +826,7 @@ app.get('/admin/game', async (c) => {
       <GameHeader game={game}>
         <div class="row">
           <a class="btn" href="/">公開頁</a>
+          <a class="btn" href="/admin/seats">抽座位</a>
           <a class="btn" href="/admin/players">玩家管理</a>
         </div>
       </GameHeader>
@@ -904,7 +1176,155 @@ app.post('/admin/game/close', async (c) => {
       .prepare("UPDATE games SET status = 'closed', host_player_id = ?, diff_mode = ?, diff_chips = ?, closed_by = ?, closed_at = datetime('now') WHERE id = ? AND status = 'open'")
       .bind(host, res.usedMode, res.diff, c.get('email'), game.id),
   ]);
-  return c.redirect(`/games/${game.id}`, 303);
+  return c.redirect(`/games/${game.id}?og=1`, 303);
+});
+
+app.post('/admin/games/:id{[0-9]+}/card', async (c) => {
+  const id = Number(c.req.param('id'));
+  const game = await getGame(c.env.DB, id);
+  if (!game || game.status !== 'closed') return c.text('Game not found or not closed', 404);
+  const buf = await c.req.arrayBuffer();
+  if (buf.byteLength > 1024 * 1024) return c.text('Image too large', 413);
+  if (!isPng(new Uint8Array(buf))) return c.text('Not a PNG', 415);
+  await c.env.DB.prepare(
+    `INSERT INTO game_cards (game_id, png_b64, updated_at) VALUES (?, ?, datetime('now'))
+     ON CONFLICT(game_id) DO UPDATE SET png_b64 = excluded.png_b64, updated_at = excluded.updated_at`,
+  )
+    .bind(id, toB64(buf))
+    .run();
+  return c.body(null, 204);
+});
+
+app.get('/admin/cards', async (c) => {
+  const db = c.env.DB;
+  const [{ results: games }, { results: rows }, { results: cards }] = await db.batch([
+    db.prepare("SELECT * FROM games WHERE status = 'closed' ORDER BY date DESC, id DESC"),
+    db.prepare(
+      `SELECT gp.*, p.name, p.nickname FROM game_players gp JOIN players p ON p.id = gp.player_id
+       JOIN games g ON g.id = gp.game_id WHERE g.status = 'closed' ORDER BY gp.sort_order, gp.player_id`,
+    ),
+    db.prepare('SELECT game_id, updated_at, length(png_b64) AS len FROM game_cards'),
+  ]);
+  const byGame = new Map<number, GameRow[]>();
+  for (const r of rows as GameRow[]) {
+    if (!byGame.has(r.game_id)) byGame.set(r.game_id, []);
+    byGame.get(r.game_id)!.push(r);
+  }
+  const have = new Map((cards as { game_id: number; updated_at: string; len: number }[]).map((x) => [x.game_id, x]));
+  const data = (games as Game[]).map((g) => ({ ...cardData(g, byGame.get(g.id) ?? [], 'nick'), has: have.has(g.id) }));
+  return render(
+    c,
+    <Layout title="連結預覽圖" admin={c.get('email')}>
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <h1>連結預覽圖</h1>
+          <div class="sub">og:image 用嘅成績卡（1200×630，綽號）。結束遊戲時會自動生成；舊局可以喺度補。</div>
+        </div>
+        <a class="btn" href="/admin">返回</a>
+      </div>
+      <div class="card">
+        <div class="row">
+          <button type="button" class="btn primary" id="genMissing">生成缺少嘅（{data.filter((d) => !d.has).length}）</button>
+          <button type="button" class="btn" id="genAll">全部重新生成（{data.length}）</button>
+          <span class="sub" id="genMsg"></span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>遊戲</th><th>日期</th><th>預覽圖</th></tr></thead>
+            <tbody>
+              {(games as Game[]).map((g) => (
+                <tr>
+                  <td class="name"><a href={`/games/${g.id}`}>{g.name}</a></td>
+                  <td>{g.date}</td>
+                  <td id={`st-${g.id}`}>
+                    {have.has(g.id) ? <a href={`/games/${g.id}/og.png`}>{Math.round((have.get(g.id)!.len * 3) / 4 / 1024)} KB</a> : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `${CARD_JS}
+(function(){var D=${cardJson(data)},m=document.getElementById('genMsg'),busy=false;
+function run(list){if(busy)return;busy=true;var i=0,ok=0;
+  (function next(){if(i>=list.length){m.textContent='完成：'+ok+' / '+list.length;busy=false;return}
+    var d=list[i++];m.textContent='生成中 '+i+' / '+list.length+'…';
+    PokerCard.upload(d).then(function(r){if(r){ok++;document.getElementById('st-'+d.id).textContent='✓'}}).catch(function(){}).then(next);
+  })();}
+document.getElementById('genMissing').onclick=function(){run(D.filter(function(d){return !d.has}))};
+document.getElementById('genAll').onclick=function(){run(D)};})();`,
+        }}
+      />
+    </Layout>,
+  );
+});
+
+app.get('/admin/seats', async (c) => {
+  const { names } = prefs(c);
+  const db = c.env.DB;
+  const open = await getOpenGame(db);
+  const inGame = new Set(open ? (await getRows(db, open.id)).map((r) => r.player_id) : []);
+  const { results: all } = await db.prepare('SELECT id, name, nickname FROM players WHERE id <> 0 ORDER BY name').all<Player>();
+  return render(
+    c,
+    <Layout title="抽座位" admin={c.get('email')}>
+      <div class="row" style="justify-content:space-between">
+        <h1>抽座位</h1>
+        <a class="btn" href="/seats">紀錄</a>
+      </div>
+      <Msg c={c} />
+      <form class="card" method="post" action="/admin/seats">
+        <div class="sub" style="margin-bottom:8px">
+          {open ? `會記錄喺 ${open.name}；已預先剔選呢場嘅玩家。` : '而家冇進行中嘅遊戲，抽籤唔會連去任何一場。'}
+        </div>
+        <div class="chk">
+          {all.map((p) => (
+            <label>
+              <input type="checkbox" name="pid" value={String(p.id)} checked={inGame.has(p.id)} /> {displayName(p, names)}
+            </label>
+          ))}
+        </div>
+        <div class="row" style="margin-top:12px">
+          <label>座位數 <input type="number" name="seats" min="2" max="12" placeholder="同人數" /></label>
+          <button class="btn primary">抽籤</button>
+        </div>
+        <p class="sub" style="margin-bottom:0">每次抽籤都會公開記錄；重抽會新增一筆紀錄。</p>
+      </form>
+    </Layout>,
+  );
+});
+
+app.post('/admin/seats', async (c) => {
+  const { names: mode } = prefs(c);
+  const db = c.env.DB;
+  const f = await c.req.parseBody({ all: true });
+  const ids = ([] as unknown[]).concat(f.pid ?? []).map((v) => Math.trunc(num(v, -1))).filter((v) => v > 0);
+  if (ids.length < 2) return go(c, '/admin/seats', '最少揀 2 位玩家。');
+  const { results: ps } = await db
+    .prepare(`SELECT id, name, nickname FROM players WHERE id IN (${ids.map(() => '?').join(',')})`)
+    .bind(...ids)
+    .all<Player>();
+  const players = ps.map((p) => displayName(p, mode)).sort();
+  if (new Set(players).size !== players.length) return go(c, '/admin/seats', '有玩家顯示名稱重複，請轉做本名再抽。');
+  const seats = Math.min(12, Math.max(players.length, Math.trunc(num(f.seats, players.length)) || players.length));
+  const open = await getOpenGame(db);
+  const date = vancouverToday();
+  const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+  const seed = await sha256Hex(seedInput(date, open?.id ?? null, players, nonce));
+  const { result, button } = drawSeats(seed, players, seats);
+  const row = await db
+    .prepare(
+      `INSERT INTO seat_draws (game_id, date, players, seats, nonce, seed, result, button, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+    )
+    .bind(open?.id ?? null, date, JSON.stringify(players), seats, nonce, seed, JSON.stringify(result), button, c.get('email'))
+    .first<{ id: number }>();
+  return c.redirect(`/seats#draw-${row?.id ?? ''}`, 303);
 });
 
 app.get('/admin/players', async (c) => {
