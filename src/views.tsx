@@ -61,6 +61,19 @@ label{font-size:13px;color:var(--muted)}
 .ac{position:relative;flex:1;min-width:180px}.ac input{width:100%}
 .ac-list{position:absolute;left:0;right:0;top:100%;z-index:4;margin:4px 0 0;padding:4px 0;list-style:none;max-height:260px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.12)}
 .ac-list li{padding:10px 12px;cursor:pointer}.ac-list li:hover{background:var(--bg)}
+/* seat draw: oval table with seats around it */
+.table-oval{position:relative;width:100%;max-width:420px;aspect-ratio:4/3;margin:8px auto}
+.table-oval::before{content:"";position:absolute;inset:18%;border-radius:50%;background:#14532d;border:6px solid #713f12}
+.seat{position:absolute;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;width:84px;text-align:center;font-size:12px;line-height:1.2}
+.seat b{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;background:var(--card);border:2px solid var(--line);font-size:12px}
+.seat span{overflow-wrap:anywhere;margin-top:2px}
+.seat.empty{opacity:.45}
+.seat.btn-d b{border-color:#ca8a04;background:#fde68a;color:#1c1917}
+.dchip{display:inline-block;background:#fde68a;color:#1c1917;border-radius:50%;width:18px;height:18px;line-height:18px;text-align:center;font-size:11px;font-weight:700}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;overflow-wrap:anywhere}
+.chk{display:flex;flex-wrap:wrap;gap:6px}
+.chk label{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:8px;padding:4px 8px;color:var(--ink);font-size:14px}
+.chk input{min-height:auto}
 /* head-to-head matrix: scrolls both ways inside the card, header row and name column stay put */
 .mx-wrap{overflow:auto;max-height:75vh;margin:0 -14px;padding:0 14px}
 .mx{border-collapse:separate;border-spacing:0}
@@ -104,6 +117,7 @@ export const Layout: FC<{ title: string; active?: string; admin?: string; childr
             <a href="/games" class={active === 'games' ? 'on' : ''}>歷史</a>
             <a href="/h2h" class={active === 'h2h' ? 'on' : ''}>對戰</a>
             <a href="/players" class={active === 'players' ? 'on' : ''}>玩家</a>
+            <a href="/seats" class={active === 'seats' ? 'on' : ''}>座位</a>
             <a href="/equity" class={active === 'equity' ? 'on' : ''}>Equity</a>
           </nav>
           <span class="spacer"></span>
