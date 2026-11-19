@@ -22,7 +22,7 @@ import {
   type Player,
   type Unit,
 } from './lib';
-import { Chip, GameHeader, GameTable, Layout, Signed, Toggles } from './views';
+import { Chip, GameHeader, GameTable, Layout, Settlement, Signed, Toggles } from './views';
 import { EquityPage } from './equity';
 import { APPLE_TOUCH_ICON_PNG, FAVICON_SVG } from './icon';
 
@@ -113,6 +113,7 @@ app.get('/', async (c) => {
         </div>
       </GameHeader>
       <GameTable game={game} rows={rows} names={names} />
+      <Settlement game={game} rows={rows} names={names} />
     </Layout>,
   );
 });
@@ -165,6 +166,7 @@ app.get('/games/:id{[0-9]+}', async (c) => {
         <Toggles names={names} back={`/games/${game.id}`} />
       </GameHeader>
       <GameTable game={game} rows={rows} names={names} />
+      <Settlement game={game} rows={rows} names={names} />
       {rows.some((r) => r.memo) && (
         <div class="card sub">
           {rows.filter((r) => r.memo).map((r) => (
