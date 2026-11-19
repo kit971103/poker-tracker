@@ -2,3 +2,4 @@ node_modules/
 .wrangler/
 .dev.vars
 migrations/0002_seed.sql
+seed.sql

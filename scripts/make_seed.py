@@ -1,6 +1,6 @@
-"""Generate migrations/0002_seed.sql from the Google Sheet text export.
+"""Generate seed.sql from the Google Sheet text export.
 
-Usage: python3 -I scripts/make_seed.py <export-file> migrations/0002_seed.sql
+Usage: python3 -I scripts/make_seed.py <export-file> seed.sql
 """
 import csv
 import io
